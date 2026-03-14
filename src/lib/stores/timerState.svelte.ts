@@ -1,0 +1,309 @@
+export type TimerMode = 'countdown' | 'stopwatch' | 'pomodoro';
+export type PomodoroPhase = 'work' | 'short-break' | 'long-break';
+export type BreakType = 'short-break' | 'long-break' | 'no-break';
+
+export type LapEntry = { index: number; lapTime: number; total: number }; // ms for stopwatch
+export type SessionEntry = { mode: TimerMode; duration: number; label: string; ts: number };
+
+// ── Pomodoro config ──────────────────────────────────────────────
+export let pomodoroConfig = $state({
+	workDuration: 25 * 60,
+	shortBreak: 5 * 60,
+	longBreak: 15 * 60,
+	autoAdvance: false,
+	// breakPattern[i] = what break follows work session i+1
+	breakPattern: ['short-break', 'short-break', 'short-break', 'long-break'] as BreakType[],
+});
+
+export function buildBreakPattern(rounds: number, existing?: BreakType[]): BreakType[] {
+	const clamped = Math.max(1, Math.min(10, rounds));
+	return Array.from({ length: clamped }, (_, i) => existing?.[i] ?? 'short-break') as BreakType[];
+}
+
+// ── Core state ───────────────────────────────────────────────────
+export let timerState = $state({
+	mode: 'countdown' as TimerMode,
+	running: false,
+	finished: false,
+
+	// countdown / pomodoro (seconds)
+	elapsed: 0,
+	countdownTarget: 25 * 60,
+
+	// stopwatch ms-precision timing
+	startedAt: 0,         // Date.now() when current run started (0 = not running)
+	accMs: 0,             // ms accumulated before current run period
+	lapStartTotalMs: 0,   // total ms when current lap started
+
+	// stopwatch laps
+	laps: [] as LapEntry[],
+
+	// pomodoro
+	pomodoroSession: 1,
+	pomodoroPhase: 'work' as PomodoroPhase,
+	pomodoroElapsed: 0,
+	waitingForNext: false,
+
+	// session log
+	sessionLog: [] as SessionEntry[],
+});
+
+// ── Internal tick handle ─────────────────────────────────────────
+let _interval: ReturnType<typeof setInterval> | null = null;
+
+function tick() {
+	const s = timerState;
+
+	if (s.mode === 'stopwatch') return; // stopwatch uses ms via Date.now()
+
+	if (s.mode === 'countdown') {
+		if (s.elapsed >= s.countdownTarget) {
+			s.running = false;
+			s.finished = true;
+			clearInterval(_interval!);
+			_interval = null;
+			playBeep();
+			logSession('countdown', s.countdownTarget, 'Countdown');
+			return;
+		}
+		s.elapsed += 1;
+		playTick();
+		return;
+	}
+
+	if (s.mode === 'pomodoro') {
+		const target = pomodoroPhaseTarget();
+		s.pomodoroElapsed += 1;
+		if (s.pomodoroElapsed >= target) {
+			playBeep();
+			logSession('pomodoro', target, phaseLabel());
+			advancePomodoro();
+		} else if (s.pomodoroPhase === 'work') {
+			playTick();
+		}
+	}
+}
+
+function pomodoroPhaseTarget(): number {
+	const p = timerState.pomodoroPhase;
+	if (p === 'work') return pomodoroConfig.workDuration;
+	if (p === 'short-break') return pomodoroConfig.shortBreak;
+	return pomodoroConfig.longBreak;
+}
+
+function phaseLabel(): string {
+	const p = timerState.pomodoroPhase;
+	if (p === 'work') return `Work #${timerState.pomodoroSession}`;
+	if (p === 'short-break') return 'Short break';
+	return 'Long break';
+}
+
+function advancePomodoro() {
+	const s = timerState;
+	const cfg = pomodoroConfig;
+	const pattern = cfg.breakPattern;
+
+	if (s.pomodoroPhase === 'work') {
+		const idx = (s.pomodoroSession - 1) % pattern.length;
+		const breakType = pattern[idx];
+		if (breakType === 'no-break') {
+			// Skip break — jump directly to next work session
+			if (s.pomodoroSession >= pattern.length) s.pomodoroSession = 1;
+			else s.pomodoroSession += 1;
+			s.pomodoroPhase = 'work';
+		} else {
+			s.pomodoroPhase = breakType;
+		}
+	} else {
+		const cycleLen = pattern.length;
+		if (s.pomodoroSession >= cycleLen) s.pomodoroSession = 1;
+		else s.pomodoroSession += 1;
+		s.pomodoroPhase = 'work';
+	}
+
+	s.pomodoroElapsed = 0;
+
+	if (cfg.autoAdvance) return;
+	s.running = false;
+	s.waitingForNext = true;
+	clearInterval(_interval!);
+	_interval = null;
+}
+
+function logSession(mode: TimerMode, duration: number, label: string) {
+	timerState.sessionLog.unshift({ mode, duration, label, ts: Date.now() });
+}
+
+// ── Public actions ───────────────────────────────────────────────
+export function startStop() {
+	const s = timerState;
+	if (s.finished) return;
+
+	if (s.running) {
+		s.running = false;
+		clearInterval(_interval!);
+		_interval = null;
+		if (s.mode === 'stopwatch' && s.startedAt > 0) {
+			s.accMs += Date.now() - s.startedAt;
+			s.startedAt = 0;
+		}
+	} else {
+		s.running = true;
+		s.waitingForNext = false;
+		if (s.mode === 'stopwatch') {
+			s.startedAt = Date.now();
+		} else {
+			_interval = setInterval(tick, 1000);
+		}
+	}
+}
+
+export function reset() {
+	timerState.running = false;
+	timerState.finished = false;
+	timerState.elapsed = 0;
+	timerState.laps = [];
+	timerState.pomodoroElapsed = 0;
+	timerState.pomodoroSession = 1;
+	timerState.pomodoroPhase = 'work';
+	timerState.waitingForNext = false;
+	timerState.startedAt = 0;
+	timerState.accMs = 0;
+	timerState.lapStartTotalMs = 0;
+	clearInterval(_interval!);
+	_interval = null;
+}
+
+export function lap() {
+	if (timerState.mode !== 'stopwatch' || !timerState.running) return;
+	const now = Date.now();
+	const total = timerState.accMs + (now - timerState.startedAt);
+	const lapTime = total - timerState.lapStartTotalMs;
+	timerState.laps.push({ index: timerState.laps.length + 1, lapTime, total });
+	timerState.lapStartTotalMs = total;
+}
+
+export function setMode(mode: TimerMode) {
+	reset();
+	timerState.mode = mode;
+}
+
+export function setCountdownTarget(seconds: number) {
+	timerState.countdownTarget = seconds;
+	timerState.elapsed = 0;
+	timerState.finished = false;
+}
+
+export function skipPomodoro() {
+	if (timerState.mode !== 'pomodoro') return;
+	clearInterval(_interval!);
+	_interval = null;
+	timerState.running = false;
+	advancePomodoro();
+}
+
+// ── Derived helpers ───────────────────────────────────────────────
+export function currentSeconds(): number {
+	const s = timerState;
+	if (s.mode === 'countdown') return s.countdownTarget - s.elapsed;
+	return pomodoroPhaseTarget() - s.pomodoroElapsed;
+}
+
+export function currentTotal(): number {
+	const s = timerState;
+	if (s.mode === 'countdown') return s.countdownTarget;
+	return pomodoroPhaseTarget();
+}
+
+// Returns current total stopwatch ms (call frequently from RAF)
+export function swTotalMs(): number {
+	const s = timerState;
+	return s.accMs + (s.startedAt > 0 ? Date.now() - s.startedAt : 0);
+}
+
+// Returns current lap ms
+export function swLapMs(): number {
+	return swTotalMs() - timerState.lapStartTotalMs;
+}
+
+export function formatTime(secs: number): string {
+	const s = Math.max(0, Math.floor(secs));
+	const h = Math.floor(s / 3600);
+	const m = Math.floor((s % 3600) / 60);
+	const sec = s % 60;
+	return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+}
+
+// HH:MM:SS.cc — for stopwatch display
+export function formatMs(ms: number): string {
+	const t = Math.max(0, ms);
+	const h = Math.floor(t / 3600000);
+	const m = Math.floor((t % 3600000) / 60000);
+	const s = Math.floor((t % 60000) / 1000);
+	const cs = Math.floor((t % 1000) / 10);
+	return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${String(cs).padStart(2, '0')}`;
+}
+
+// MM:SS.cc (+ HH: prefix if ≥ 1h) — for lap display
+export function formatLapMs(ms: number): string {
+	const t = Math.max(0, ms);
+	const h = Math.floor(t / 3600000);
+	const m = Math.floor((t % 3600000) / 60000);
+	const s = Math.floor((t % 60000) / 1000);
+	const cs = Math.floor((t % 1000) / 10);
+	const prefix = h > 0 ? `${h}:` : '';
+	return `${prefix}${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${String(cs).padStart(2, '0')}`;
+}
+
+export function todayFocusSeconds(): number {
+	const midnight = new Date();
+	midnight.setHours(0, 0, 0, 0);
+	return timerState.sessionLog
+		.filter((e) => e.ts >= midnight.getTime() && (e.mode === 'countdown' || (e.mode === 'pomodoro' && e.label.startsWith('Work'))))
+		.reduce((acc, e) => acc + e.duration, 0);
+}
+
+// ── Sound config ─────────────────────────────────────────────────
+export let soundConfig = $state({
+	alarmEnabled: true,
+	tickEnabled: false,
+});
+
+// ── Sound ────────────────────────────────────────────────────────
+function playBeep() {
+	if (!soundConfig.alarmEnabled) return;
+	try {
+		const ctx = new AudioContext();
+		const osc = ctx.createOscillator();
+		const gain = ctx.createGain();
+		osc.connect(gain);
+		gain.connect(ctx.destination);
+		osc.frequency.value = 880;
+		osc.type = 'sine';
+		gain.gain.setValueAtTime(0.4, ctx.currentTime);
+		gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 1.2);
+		osc.start(ctx.currentTime);
+		osc.stop(ctx.currentTime + 1.2);
+	} catch {
+		// audio not available
+	}
+}
+
+export function playTick() {
+	if (!soundConfig.tickEnabled) return;
+	try {
+		const ctx = new AudioContext();
+		const osc = ctx.createOscillator();
+		const gain = ctx.createGain();
+		osc.connect(gain);
+		gain.connect(ctx.destination);
+		osc.frequency.value = 1200;
+		osc.type = 'sine';
+		gain.gain.setValueAtTime(0.06, ctx.currentTime);
+		gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.04);
+		osc.start(ctx.currentTime);
+		osc.stop(ctx.currentTime + 0.04);
+	} catch {
+		// audio not available
+	}
+}
