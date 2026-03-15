@@ -1,5 +1,4 @@
-import { browser } from '$app/environment';
-import Dexie, { type Table } from 'dexie';
+// Type definitions only — data lives in Firestore
 
 export interface Subtask {
 	id: string;
@@ -19,8 +18,8 @@ export interface Task {
 	notes: string;
 	completed: boolean;
 	completedAt?: number;
-	priority: 0 | 1 | 2 | 3; // 0=none, 1=low, 2=medium, 3=high
-	dueDate?: string; // ISO date-only: "2026-03-15"
+	priority: 0 | 1 | 2 | 3;
+	dueDate?: string;
 	tags: string[];
 	subtasks: Subtask[];
 	createdAt: number;
@@ -28,31 +27,3 @@ export interface Task {
 	order: number;
 	tabId: string;
 }
-
-class TodoDB extends Dexie {
-	tasks!: Table<Task, string>;
-	tabs!: Table<Tab, string>;
-
-	constructor() {
-		super('toolsApp_todo');
-		this.version(1).stores({
-			tasks: 'id, completed, dueDate, priority, createdAt, *tags',
-		});
-		this.version(2)
-			.stores({
-				tasks: 'id, completed, dueDate, priority, createdAt, *tags, tabId',
-				tabs: 'id, order',
-			})
-			.upgrade((tx) => {
-				// Migrate existing tasks to the default tab
-				return tx
-					.table('tasks')
-					.toCollection()
-					.modify((task: Task) => {
-						if (!task.tabId) task.tabId = 'default';
-					});
-			});
-	}
-}
-
-export const db = browser ? new TodoDB() : (null as unknown as TodoDB);

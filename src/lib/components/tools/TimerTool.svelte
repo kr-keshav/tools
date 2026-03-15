@@ -196,8 +196,8 @@
 
   // ── Keyboard shortcuts ────────────────────────────────────────────
   function onKey(e: KeyboardEvent) {
-    const tag = (e.target as HTMLElement).tagName;
-    if (tag === "INPUT" || tag === "TEXTAREA") return;
+    const el = e.target as HTMLElement;
+    if (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable) return;
     if (e.code === "Space") { e.preventDefault(); startStop(); }
     if (e.code === "KeyR") reset();
     if (e.code === "KeyL") lap();

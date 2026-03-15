@@ -3,6 +3,6 @@
 	import { onMount } from 'svelte';
 
 	onMount(() => {
-		goto('/counter', { replaceState: true });
+		goto('/timer', { replaceState: true });
 	});
 </script>

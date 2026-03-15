@@ -1,8 +1,63 @@
 <script lang="ts">
 	import favicon from '$lib/assets/favicon.svg';
 	import '../app.css';
+	import { browser } from '$app/environment';
+	import { goto } from '$app/navigation';
+	import { page } from '$app/stores';
+	import { authState, ensureAnonymousAuth } from '$lib/stores/authState.svelte';
+	import { loadNotes, unloadNotes } from '$lib/stores/notesState.svelte';
+	import { loadTasks, unloadTasks } from '$lib/stores/todoState.svelte';
+	import { setupTimerSync, loadTimerState, unloadTimerState } from '$lib/stores/timerState.svelte';
 
 	let { children } = $props();
+
+	let prevDataUid = $state<string | null>(null);
+
+	$effect(() => {
+		if (!browser || authState.loading) return;
+
+		const viewUid: string | null = $page.url.searchParams.get('view');
+		const isLoginPage = $page.url.pathname === '/login';
+
+		if (!authState.user) {
+			// Auto anonymous auth — no redirect to login
+			ensureAnonymousAuth();
+			return;
+		}
+
+		// Redirect away from login page if already signed in (real account)
+		if (isLoginPage && !authState.user.isAnonymous) {
+			goto('/timer');
+			return;
+		}
+
+		// Determine which UID's data to load
+		const targetUid = viewUid ?? authState.user.uid;
+		const isViewerMode = !!viewUid;
+
+		if (targetUid !== prevDataUid) {
+			// Clean up previous data
+			if (prevDataUid !== null) {
+				unloadNotes();
+				unloadTasks();
+				unloadTimerState();
+			}
+
+			// Load data for target user
+			loadNotes(targetUid);
+			loadTasks(targetUid);
+
+			if (isViewerMode) {
+				// Read-only timer sync — track owner's timer
+				loadTimerState(targetUid);
+			} else {
+				// Owner mode — restore state and enable writes
+				setupTimerSync(authState.user.uid);
+			}
+
+			prevDataUid = targetUid;
+		}
+	});
 </script>
 
 <svelte:head>
@@ -15,4 +70,33 @@
 	/>
 </svelte:head>
 
-{@render children()}
+{#if authState.loading}
+	<div class="loading-screen">
+		<div class="spinner"></div>
+	</div>
+{:else}
+	{@render children()}
+{/if}
+
+<style>
+	.loading-screen {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		height: 100vh;
+		background: var(--color-bg-base);
+	}
+
+	.spinner {
+		width: 24px;
+		height: 24px;
+		border: 2px solid var(--color-border-default);
+		border-top-color: var(--color-text-muted);
+		border-radius: 50%;
+		animation: spin 0.7s linear infinite;
+	}
+
+	@keyframes spin {
+		to { transform: rotate(360deg); }
+	}
+</style>

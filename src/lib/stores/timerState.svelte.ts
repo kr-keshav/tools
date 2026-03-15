@@ -1,3 +1,7 @@
+import { browser } from '$app/environment';
+import { doc, setDoc, getDoc, onSnapshot, type Unsubscribe } from 'firebase/firestore';
+import { firestore } from '$lib/firebase';
+
 export type TimerMode = 'countdown' | 'stopwatch' | 'pomodoro';
 export type PomodoroPhase = 'work' | 'short-break' | 'long-break';
 export type BreakType = 'short-break' | 'long-break' | 'no-break';
@@ -64,6 +68,7 @@ function tick() {
 			_interval = null;
 			playBeep();
 			logSession('countdown', s.countdownTarget, 'Countdown');
+			writeTimerToFirestore();
 			return;
 		}
 		s.elapsed += 1;
@@ -156,6 +161,7 @@ export function startStop() {
 			_interval = setInterval(tick, 1000);
 		}
 	}
+	writeTimerToFirestore();
 }
 
 export function reset() {
@@ -172,6 +178,7 @@ export function reset() {
 	timerState.lapStartTotalMs = 0;
 	clearInterval(_interval!);
 	_interval = null;
+	writeTimerToFirestore();
 }
 
 export function lap() {
@@ -181,17 +188,20 @@ export function lap() {
 	const lapTime = total - timerState.lapStartTotalMs;
 	timerState.laps.push({ index: timerState.laps.length + 1, lapTime, total });
 	timerState.lapStartTotalMs = total;
+	writeTimerToFirestore();
 }
 
 export function setMode(mode: TimerMode) {
 	reset();
 	timerState.mode = mode;
+	writeTimerToFirestore();
 }
 
 export function setCountdownTarget(seconds: number) {
 	timerState.countdownTarget = seconds;
 	timerState.elapsed = 0;
 	timerState.finished = false;
+	writeTimerToFirestore();
 }
 
 export function skipPomodoro() {
@@ -200,6 +210,7 @@ export function skipPomodoro() {
 	_interval = null;
 	timerState.running = false;
 	advancePomodoro();
+	writeTimerToFirestore();
 }
 
 // ── Derived helpers ───────────────────────────────────────────────
@@ -261,6 +272,137 @@ export function todayFocusSeconds(): number {
 	return timerState.sessionLog
 		.filter((e) => e.ts >= midnight.getTime() && (e.mode === 'countdown' || (e.mode === 'pomodoro' && e.label.startsWith('Work'))))
 		.reduce((acc, e) => acc + e.duration, 0);
+}
+
+// ── Firestore sync ────────────────────────────────────────────────
+let _syncUid: string | null = null;
+let _isViewerMode = false;
+let _unsubTimer: Unsubscribe | null = null;
+
+interface TimerSyncDoc {
+	mode: TimerMode;
+	running: boolean;
+	syncedAt: number;
+	elapsed: number;
+	countdownTarget: number;
+	pomodoroSession: number;
+	pomodoroPhase: string;
+	pomodoroElapsed: number;
+	waitingForNext: boolean;
+	finished: boolean;
+	startedAt: number;
+	accMs: number;
+	lapStartTotalMs: number;
+	laps: LapEntry[];
+}
+
+function writeTimerToFirestore() {
+	if (!_syncUid || _isViewerMode || !browser) return;
+	const s = timerState;
+	const data: TimerSyncDoc = {
+		mode: s.mode,
+		running: s.running,
+		syncedAt: Date.now(),
+		elapsed: s.elapsed,
+		countdownTarget: s.countdownTarget,
+		pomodoroSession: s.pomodoroSession,
+		pomodoroPhase: s.pomodoroPhase,
+		pomodoroElapsed: s.pomodoroElapsed,
+		waitingForNext: s.waitingForNext,
+		finished: s.finished,
+		startedAt: s.startedAt,
+		accMs: s.accMs,
+		lapStartTotalMs: s.lapStartTotalMs,
+		laps: s.laps,
+	};
+	setDoc(doc(firestore, `users/${_syncUid}/meta/timer`), data).catch(() => {});
+}
+
+/** Called for the owner device — enables writes and restores last state */
+export async function setupTimerSync(uid: string) {
+	if (!browser) return;
+	_syncUid = uid;
+	_isViewerMode = false;
+
+	try {
+		const snap = await getDoc(doc(firestore, `users/${uid}/meta/timer`));
+		if (snap.exists()) {
+			const d = snap.data() as TimerSyncDoc;
+			const sinceSyncSecs = d.running ? Math.floor((Date.now() - d.syncedAt) / 1000) : 0;
+			timerState.mode = d.mode;
+			timerState.finished = d.finished;
+			timerState.countdownTarget = d.countdownTarget;
+			timerState.elapsed = d.elapsed + (d.mode === 'countdown' ? sinceSyncSecs : 0);
+			timerState.pomodoroSession = d.pomodoroSession;
+			timerState.pomodoroPhase = d.pomodoroPhase as PomodoroPhase;
+			timerState.pomodoroElapsed = d.pomodoroElapsed + (d.mode === 'pomodoro' ? sinceSyncSecs : 0);
+			timerState.waitingForNext = d.waitingForNext;
+			timerState.startedAt = d.startedAt;
+			timerState.accMs = d.accMs;
+			timerState.lapStartTotalMs = d.lapStartTotalMs;
+			timerState.laps = d.laps ?? [];
+			// Auto-resume if was running
+			if (d.running) {
+				timerState.running = true;
+				timerState.waitingForNext = false;
+				if (d.mode === 'stopwatch') {
+					// startedAt already set above; RAF loop handles display
+				} else {
+					_interval = setInterval(tick, 1000);
+				}
+			} else {
+				timerState.running = false;
+			}
+		}
+	} catch {
+		// No stored state, use defaults
+	}
+}
+
+/** Called for viewer device — sets up onSnapshot to track owner's timer */
+export function loadTimerState(uid: string) {
+	if (!browser) return;
+	_unsubTimer?.();
+	_isViewerMode = true;
+	_syncUid = null;
+
+	_unsubTimer = onSnapshot(
+		doc(firestore, `users/${uid}/meta/timer`),
+		(snap) => {
+			if (!snap.exists()) return;
+			const d = snap.data() as TimerSyncDoc;
+			const sinceSyncSecs = d.running ? Math.floor((Date.now() - d.syncedAt) / 1000) : 0;
+
+			// Stop any local interval before applying new state
+			if (_interval) { clearInterval(_interval); _interval = null; }
+
+			timerState.mode = d.mode;
+			timerState.running = d.running;
+			timerState.finished = d.finished;
+			timerState.countdownTarget = d.countdownTarget;
+			timerState.elapsed = d.elapsed + (d.mode === 'countdown' ? sinceSyncSecs : 0);
+			timerState.pomodoroSession = d.pomodoroSession;
+			timerState.pomodoroPhase = d.pomodoroPhase as PomodoroPhase;
+			timerState.pomodoroElapsed = d.pomodoroElapsed + (d.mode === 'pomodoro' ? sinceSyncSecs : 0);
+			timerState.waitingForNext = d.waitingForNext;
+			timerState.startedAt = d.startedAt;
+			timerState.accMs = d.accMs;
+			timerState.lapStartTotalMs = d.lapStartTotalMs;
+			timerState.laps = d.laps ?? [];
+
+			// Restart local interval if running
+			if (d.running && d.mode !== 'stopwatch') {
+				_interval = setInterval(tick, 1000);
+			}
+		}
+	);
+}
+
+export function unloadTimerState() {
+	_unsubTimer?.();
+	_unsubTimer = null;
+	_isViewerMode = false;
+	_syncUid = null;
 }
 
 // ── Sound config ─────────────────────────────────────────────────

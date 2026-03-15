@@ -1,9 +1,8 @@
 <script lang="ts">
-	import { onMount, tick } from 'svelte';
+	import { tick } from 'svelte';
 	import {
 		tasks,
 		todoUI,
-		loadTasks,
 		addTask,
 		updateTask,
 		reorderTask,
@@ -67,10 +66,6 @@
 	const isFiltered = $derived(todoUI.filterText.length > 0 || todoUI.activeTags.length > 0);
 
 	// ── Mount ─────────────────────────────────────────────────────
-	onMount(async () => {
-		await loadTasks();
-	});
-
 	// ── Add task ─────────────────────────────────────────────────
 	function submitAdd() {
 		const raw = addDraft.trim();
@@ -90,7 +85,7 @@
 	// ── Global keyboard handler ───────────────────────────────────
 	function handleGlobalKey(e: KeyboardEvent) {
 		const target = e.target as HTMLElement;
-		const isInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA';
+		const isInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable;
 
 		if (e.key === 'Escape') {
 			if (showShortcuts) { showShortcuts = false; return; }

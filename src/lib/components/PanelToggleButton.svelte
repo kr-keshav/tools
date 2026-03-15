@@ -23,7 +23,7 @@
 	       {hoverColor[tool]}
 	       {side === 'left'
 		       ? 'left-0 border-l-0 rounded-r'
-		       : 'right-0 border-r-0 rounded-l rotate-180'}"
+		       : 'right-0 border-l-0 rounded-r rotate-180'}"
 	onclick={open}
 	title="Open {tool}"
 >
