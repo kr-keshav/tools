@@ -4,7 +4,7 @@
 </script>
 
 <svelte:head>
-	<title>Todo</title>
+	<title>Todo · WorkKit</title>
 </svelte:head>
 
 <ToolLayout centerTool="todo" leftTool="timer" rightTool="notes">

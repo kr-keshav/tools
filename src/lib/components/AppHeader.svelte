@@ -29,11 +29,14 @@
 	<!-- Left: logo -->
 	<div class="left">
 		<button class="logo" onclick={() => goto('/timer')} title="Go to Timer">
-			<svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-				<rect x="0.5" y="0.5" width="15" height="15" rx="3.5" stroke="currentColor" stroke-opacity="0.4"/>
-				<path d="M8 4v4l2.5 2.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+			<svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+				<rect width="18" height="18" rx="5" fill="#6c8ebf" fill-opacity="0.15"/>
+				<circle cx="9" cy="10" r="5" stroke="#6c8ebf" stroke-width="1.3" fill="none"/>
+				<line x1="9" y1="10" x2="9" y2="7" stroke="#6c8ebf" stroke-width="1.3" stroke-linecap="round"/>
+				<line x1="9" y1="10" x2="11.2" y2="11.5" stroke="#6c8ebf" stroke-width="1.3" stroke-linecap="round"/>
+				<line x1="7" y1="4" x2="11" y2="4" stroke="#6c8ebf" stroke-width="1.3" stroke-linecap="round"/>
 			</svg>
-			<span>ToolsApp</span>
+			<span class="logo-text"><span class="logo-work">Work</span><span class="logo-kit">Kit</span></span>
 		</button>
 	</div>
 
@@ -155,6 +158,18 @@
 		letter-spacing: -0.01em;
 	}
 	.logo:hover { color: var(--color-text-primary); }
+
+	.logo-text {
+		font-size: 0.82rem;
+		font-weight: 600;
+		letter-spacing: -0.02em;
+	}
+	.logo-work {
+		color: var(--color-text-primary);
+	}
+	.logo-kit {
+		color: #6c8ebf;
+	}
 
 	.viewer-banner {
 		position: absolute;
