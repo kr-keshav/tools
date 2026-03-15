@@ -357,6 +357,9 @@ export async function setupTimerSync(uid: string) {
 	} catch {
 		// No stored state, use defaults
 	}
+
+	// Always write current state so viewers see something immediately
+	writeTimerToFirestore();
 }
 
 /** Called for viewer device — sets up onSnapshot to track owner's timer */
