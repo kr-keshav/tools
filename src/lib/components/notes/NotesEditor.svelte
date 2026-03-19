@@ -97,22 +97,31 @@
 		return () => { editor?.destroy(); editor = null; };
 	});
 
-	// Update editor when active note changes
+	// Update editor when active note changes or its body is updated externally (e.g. Firestore sync)
 	$effect(() => {
 		const id = notesUI.activeNoteId;
-		void getActiveNote(); // track dependency
-		if (!editor || id === prevNoteId) return;
-		prevNoteId = id;
-		const note = getActiveNote();
-		updatingContent = true;
-		editor.commands.setContent(note?.body ?? '');
-		editor.setEditable(!note?.deletedAt);
-		updatingContent = false;
-		tagInput = '';
-		showMoreMenu = false;
-		showColorPicker = false;
-		showFolderInput = false;
-		if (!note?.title && !note?.body) setTimeout(() => titleEl?.focus(), 50);
+		const note = getActiveNote(); // track dependency on both id and note content
+		if (!editor) return;
+		if (id !== prevNoteId) {
+			prevNoteId = id;
+			updatingContent = true;
+			editor.commands.setContent(note?.body ?? '');
+			editor.setEditable(!note?.deletedAt);
+			updatingContent = false;
+			tagInput = '';
+			showMoreMenu = false;
+			showColorPicker = false;
+			showFolderInput = false;
+			if (!note?.title && !note?.body) setTimeout(() => titleEl?.focus(), 50);
+		} else if (note && !updatingContent) {
+			// Same note — apply body changes that came in externally (viewer mode / Firestore sync)
+			const currentMd = editor.storage.markdown.getMarkdown();
+			if (note.body !== currentMd) {
+				updatingContent = true;
+				editor.commands.setContent(note.body);
+				updatingContent = false;
+			}
+		}
 	});
 
 	// Sync editable flag when trash status changes

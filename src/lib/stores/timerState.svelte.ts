@@ -328,7 +328,7 @@ export async function setupTimerSync(uid: string) {
 		const snap = await getDoc(doc(firestore, `users/${uid}/meta/timer`));
 		if (snap.exists()) {
 			const d = snap.data() as TimerSyncDoc;
-			const sinceSyncSecs = d.running ? Math.floor((Date.now() - d.syncedAt) / 1000) : 0;
+			const sinceSyncSecs = d.running ? Math.max(0, Math.floor((Date.now() - d.syncedAt) / 1000)) : 0;
 			timerState.mode = d.mode;
 			timerState.finished = d.finished;
 			timerState.countdownTarget = d.countdownTarget;
@@ -374,7 +374,7 @@ export function loadTimerState(uid: string) {
 		(snap) => {
 			if (!snap.exists()) return;
 			const d = snap.data() as TimerSyncDoc;
-			const sinceSyncSecs = d.running ? Math.floor((Date.now() - d.syncedAt) / 1000) : 0;
+			const sinceSyncSecs = d.running ? Math.max(0, Math.floor((Date.now() - d.syncedAt) / 1000)) : 0;
 
 			// Stop any local interval before applying new state
 			if (_interval) { clearInterval(_interval); _interval = null; }
