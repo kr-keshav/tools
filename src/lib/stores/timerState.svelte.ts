@@ -1,5 +1,5 @@
 import { browser } from '$app/environment';
-import { doc, setDoc, getDoc, onSnapshot, type Unsubscribe } from 'firebase/firestore';
+import { doc, setDoc, onSnapshot, type Unsubscribe } from 'firebase/firestore';
 import { firestore } from '$lib/firebase';
 
 export type TimerMode = 'countdown' | 'stopwatch' | 'pomodoro';
@@ -276,7 +276,7 @@ export function todayFocusSeconds(): number {
 
 // ── Firestore sync ────────────────────────────────────────────────
 let _syncUid: string | null = null;
-let _isViewerMode = false;
+let _lastWrittenAt = 0; // timestamp of our last write — used for last-write-wins conflict resolution
 let _unsubTimer: Unsubscribe | null = null;
 
 interface TimerSyncDoc {
@@ -297,12 +297,13 @@ interface TimerSyncDoc {
 }
 
 function writeTimerToFirestore() {
-	if (!_syncUid || _isViewerMode || !browser) return;
+	if (!_syncUid || !browser) return;
+	_lastWrittenAt = Date.now();
 	const s = timerState;
 	const data: TimerSyncDoc = {
 		mode: s.mode,
 		running: s.running,
-		syncedAt: Date.now(),
+		syncedAt: _lastWrittenAt,
 		elapsed: s.elapsed,
 		countdownTarget: s.countdownTarget,
 		pomodoroSession: s.pomodoroSession,
@@ -318,65 +319,29 @@ function writeTimerToFirestore() {
 	setDoc(doc(firestore, `users/${_syncUid}/meta/timer`), data).catch(() => {});
 }
 
-/** Called for the owner device — enables writes and restores last state */
-export async function setupTimerSync(uid: string) {
-	if (!browser) return;
-	_syncUid = uid;
-	_isViewerMode = false;
-
-	try {
-		const snap = await getDoc(doc(firestore, `users/${uid}/meta/timer`));
-		if (snap.exists()) {
-			const d = snap.data() as TimerSyncDoc;
-			const sinceSyncSecs = d.running ? Math.max(0, Math.floor((Date.now() - d.syncedAt) / 1000)) : 0;
-			timerState.mode = d.mode;
-			timerState.finished = d.finished;
-			timerState.countdownTarget = d.countdownTarget;
-			timerState.elapsed = d.elapsed + (d.mode === 'countdown' ? sinceSyncSecs : 0);
-			timerState.pomodoroSession = d.pomodoroSession;
-			timerState.pomodoroPhase = d.pomodoroPhase as PomodoroPhase;
-			timerState.pomodoroElapsed = d.pomodoroElapsed + (d.mode === 'pomodoro' ? sinceSyncSecs : 0);
-			timerState.waitingForNext = d.waitingForNext;
-			timerState.startedAt = d.startedAt;
-			timerState.accMs = d.accMs;
-			timerState.lapStartTotalMs = d.lapStartTotalMs;
-			timerState.laps = d.laps ?? [];
-			// Auto-resume if was running
-			if (d.running) {
-				timerState.running = true;
-				timerState.waitingForNext = false;
-				if (d.mode === 'stopwatch') {
-					// startedAt already set above; RAF loop handles display
-				} else {
-					_interval = setInterval(tick, 1000);
-				}
-			} else {
-				timerState.running = false;
-			}
-		}
-	} catch {
-		// No stored state, use defaults
-	}
-
-	// Always write current state so viewers see something immediately
-	writeTimerToFirestore();
-}
-
-/** Called for viewer device — sets up onSnapshot to track owner's timer */
-export function loadTimerState(uid: string) {
+/**
+ * Unified timer sync — works for both the owner and any device that has the share URL.
+ * Last-write-wins: incoming snapshots are only applied if their syncedAt is newer
+ * than the last write this device made, so both devices can freely start/stop/reset
+ * and whichever action happened most recently is the truth.
+ */
+export function setupTimerSync(uid: string) {
 	if (!browser) return;
 	_unsubTimer?.();
-	_isViewerMode = true;
-	_syncUid = null;
+	_syncUid = uid;
+	_lastWrittenAt = 0; // reset so the first snapshot is always applied
 
 	_unsubTimer = onSnapshot(
 		doc(firestore, `users/${uid}/meta/timer`),
 		(snap) => {
 			if (!snap.exists()) return;
 			const d = snap.data() as TimerSyncDoc;
+
+			// Last-write-wins: ignore snapshots older than our last write
+			if (d.syncedAt <= _lastWrittenAt) return;
+
 			const sinceSyncSecs = d.running ? Math.max(0, Math.floor((Date.now() - d.syncedAt) / 1000)) : 0;
 
-			// Stop any local interval before applying new state
 			if (_interval) { clearInterval(_interval); _interval = null; }
 
 			timerState.mode = d.mode;
@@ -393,7 +358,6 @@ export function loadTimerState(uid: string) {
 			timerState.lapStartTotalMs = d.lapStartTotalMs;
 			timerState.laps = d.laps ?? [];
 
-			// Restart local interval if running
 			if (d.running && d.mode !== 'stopwatch') {
 				_interval = setInterval(tick, 1000);
 			}
@@ -404,8 +368,8 @@ export function loadTimerState(uid: string) {
 export function unloadTimerState() {
 	_unsubTimer?.();
 	_unsubTimer = null;
-	_isViewerMode = false;
 	_syncUid = null;
+	_lastWrittenAt = 0;
 }
 
 // ── Sound config ─────────────────────────────────────────────────

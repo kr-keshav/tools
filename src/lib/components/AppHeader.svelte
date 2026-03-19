@@ -40,14 +40,14 @@
 		</button>
 	</div>
 
-	<!-- Center: viewer mode banner -->
+	<!-- Center: live sync banner -->
 	{#if isViewerMode}
 		<div class="viewer-banner">
 			<svg width="11" height="11" viewBox="0 0 11 11" fill="none">
-				<ellipse cx="5.5" cy="5.5" rx="5" ry="3" stroke="currentColor" stroke-width="1"/>
-				<circle cx="5.5" cy="5.5" r="1.5" fill="currentColor"/>
+				<path d="M1.5 5.5A4 4 0 0 1 9 3M9.5 5.5A4 4 0 0 1 2 8" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/>
+				<path d="M7.5 2.5L9 3l-.5 1.5M3.5 8.5L2 8l.5-1.5" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/>
 			</svg>
-			Shared view · read only
+			Live sync
 			<button class="viewer-exit" onclick={() => goto('/timer')}>Exit</button>
 		</div>
 	{/if}

@@ -6,7 +6,7 @@
 	import { authState, ensureAnonymousAuth } from '$lib/stores/authState.svelte';
 	import { loadNotes, unloadNotes } from '$lib/stores/notesState.svelte';
 	import { loadTasks, unloadTasks } from '$lib/stores/todoState.svelte';
-	import { setupTimerSync, loadTimerState, unloadTimerState } from '$lib/stores/timerState.svelte';
+	import { setupTimerSync, unloadTimerState } from '$lib/stores/timerState.svelte';
 
 	let { children } = $props();
 
@@ -32,7 +32,6 @@
 
 		// Determine which UID's data to load
 		const targetUid = viewUid ?? authState.user.uid;
-		const isViewerMode = !!viewUid;
 
 		if (targetUid !== prevDataUid) {
 			// Clean up previous data
@@ -42,17 +41,10 @@
 				unloadTimerState();
 			}
 
-			// Load data for target user
+			// Load data for target user — bidirectional sync, last-write-wins
 			loadNotes(targetUid);
 			loadTasks(targetUid);
-
-			if (isViewerMode) {
-				// Read-only timer sync — track owner's timer
-				loadTimerState(targetUid);
-			} else {
-				// Owner mode — restore state and enable writes
-				setupTimerSync(authState.user.uid);
-			}
+			setupTimerSync(targetUid);
 
 			prevDataUid = targetUid;
 		}
