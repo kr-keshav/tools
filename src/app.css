@@ -10,9 +10,11 @@
   --color-text-primary: #e8e8e8;
   --color-text-secondary: #888888;
   --color-text-muted: #555555;
+  --color-text-faint: #555555;
   --color-accent-timer: #6c8ebf;
   --color-accent-notes: #82b366;
   --color-accent-todo: #b5866b;
+  --color-accent-calc: #9673a6;
 
   --font-family-mono: 'JetBrains Mono', monospace;
 
