@@ -17,9 +17,9 @@
 
 <button
 	class="fixed top-1/2 -translate-y-1/2 z-50 bg-bg-surface border border-border-default text-text-muted
-	       font-mono text-[0.65rem] font-semibold tracking-widest uppercase
+	       text-[0.65rem] font-semibold tracking-widest uppercase
 	       [writing-mode:vertical-rl] px-2 py-4 cursor-pointer
-	       transition-all duration-150 hover:bg-bg-hover
+	       transition-all duration-150 hover:bg-bg-hover focus-visible:-outline-offset-2
 	       {hoverColor[tool]}
 	       {side === 'left'
 		       ? 'left-0 border-l-0 rounded-r'

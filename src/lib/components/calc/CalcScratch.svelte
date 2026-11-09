@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { onDestroy, tick } from 'svelte';
 	import { calcUI } from '$lib/stores/calcState.svelte';
-	import { formatNumber, prepareInput } from '$lib/calc/engine';
-	import { evaluateTape, syntaxError } from '$lib/calc/tape';
+	import { CalcError, evaluate, formatNumber, prepareInput } from '$lib/calc/engine';
+	import { splitLine, syntaxError } from '$lib/calc/tape';
 	import type { CalcField } from './calcContext';
 
 	// Lives only in this component: nothing here reaches the tape or Firestore.
@@ -32,7 +32,12 @@
 		if (!value.trim()) return null;
 		const input = prepareInput(value);
 		if (syntaxError(input)) return null;
-		return evaluateTape([{ id: 'scratch', input }], calcUI.angle)[0];
+		// No tape here, so `ans` reports an error rather than quietly meaning 0
+		try {
+			return { value: evaluate(splitLine(input).expr, { angle: calcUI.angle }), error: undefined };
+		} catch (e) {
+			return { value: undefined, error: e instanceof CalcError ? e.message : 'Invalid expression' };
+		}
 	});
 
 	/** Phones open this from the keypad bar, which has no room for a row of its own. */
@@ -148,7 +153,7 @@
 		color: var(--color-text-primary);
 		caret-color: var(--color-accent-calc);
 	}
-	input::placeholder { color: var(--color-text-faint); }
+	input::placeholder { color: var(--color-text-muted); }
 
 	.result {
 		min-height: 1.4rem;
@@ -160,7 +165,7 @@
 		overflow: hidden;
 		text-overflow: ellipsis;
 	}
-	.result.soft { font-size: 0.68rem; color: var(--color-text-faint); }
+	.result.soft { font-size: 0.68rem; color: var(--color-text-muted); }
 
 	/* Stacked above the docked keypad, where every row takes height from the tape */
 	@media (max-width: 1023.98px) {
@@ -171,7 +176,8 @@
 			grid-template-columns: minmax(0, 1fr) auto auto;
 			align-items: center;
 			gap: 0.25rem;
-			margin: 0 0.625rem 0.5rem;
+			/* The top margin leaves room for the focus ring below the entry bar */
+			margin: 0.5rem 0.625rem;
 			padding: 0 0.25rem 0 0.875rem;
 		}
 		.head { display: contents; }

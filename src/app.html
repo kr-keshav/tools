@@ -1,11 +1,24 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" class="ripple" data-theme="light">
 	<head>
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<script>
+			// Runs before first paint so a saved dark theme never flashes light.
+			// Calc used to keep the theme in its own prefs, so carry that over once.
+			try {
+				var saved = localStorage.getItem('workkit-theme')
+					|| JSON.parse(localStorage.getItem('workkit-calc-prefs') || '{}').theme;
+				if (saved === 'dark' || saved === 'light') {
+					document.documentElement.dataset.theme = saved;
+					localStorage.setItem('workkit-theme', saved);
+				}
+			} catch (e) {}
+		</script>
 		%sveltekit.head%
 	</head>
 	<body data-sveltekit-preload-data="hover">
+		<noscript>WorkKit needs JavaScript to run. Please turn it on and reload.</noscript>
 		<div style="display: contents">%sveltekit.body%</div>
 	</body>
 </html>

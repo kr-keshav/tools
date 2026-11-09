@@ -2,10 +2,20 @@
 	import { page } from '$app/stores';
 	import { goto } from '$app/navigation';
 	import { authState, signOut } from '$lib/stores/authState.svelte';
+	import { panelState, toggleLeft, toggleRight, type ToolName } from '$lib/stores/panelState.svelte';
+	import { themeState, toggleTheme } from '$lib/stores/themeState.svelte';
 	import QRModal from './QRModal.svelte';
+
+	let { leftTool, rightTool }: { leftTool?: ToolName; rightTool?: ToolName } = $props();
 
 	let showQR = $state(false);
 	let showUserMenu = $state(false);
+
+	const accent: Record<ToolName, string> = {
+		timer: 'var(--tag-0-fg)',
+		notes: 'var(--tag-2-fg)',
+		todo:  'var(--tag-1-fg)',
+	};
 
 	const uid = $derived(authState.user?.uid ?? '');
 	const isAnon = $derived(authState.user?.isAnonymous ?? true);
@@ -29,16 +39,43 @@
 <header class="header">
 	<!-- Left: logo -->
 	<div class="left">
-		<button class="logo" onclick={() => goto('/timer')} title="Go to Timer">
+		<button class="logo" onclick={() => goto('/timer' + $page.url.search)} title="Go to Timer">
 			<svg width="18" height="18" viewBox="0 0 18 18" fill="none">
-				<rect width="18" height="18" rx="5" fill="#6c8ebf" fill-opacity="0.15"/>
-				<circle cx="9" cy="10" r="5" stroke="#6c8ebf" stroke-width="1.3" fill="none"/>
-				<line x1="9" y1="10" x2="9" y2="7" stroke="#6c8ebf" stroke-width="1.3" stroke-linecap="round"/>
-				<line x1="9" y1="10" x2="11.2" y2="11.5" stroke="#6c8ebf" stroke-width="1.3" stroke-linecap="round"/>
-				<line x1="7" y1="4" x2="11" y2="4" stroke="#6c8ebf" stroke-width="1.3" stroke-linecap="round"/>
+				<rect width="18" height="18" rx="5" fill="var(--color-accent)" fill-opacity="0.15"/>
+				<circle cx="9" cy="10" r="5" stroke="var(--color-accent)" stroke-width="1.3" fill="none"/>
+				<line x1="9" y1="10" x2="9" y2="7" stroke="var(--color-accent)" stroke-width="1.3" stroke-linecap="round"/>
+				<line x1="9" y1="10" x2="11.2" y2="11.5" stroke="var(--color-accent)" stroke-width="1.3" stroke-linecap="round"/>
+				<line x1="7" y1="4" x2="11" y2="4" stroke="var(--color-accent)" stroke-width="1.3" stroke-linecap="round"/>
 			</svg>
 			<span class="logo-text"><span class="logo-work">Work</span><span class="logo-kit">Kit</span></span>
 		</button>
+
+		<!-- Panel toggles. The edge tabs are easy to miss and unusable on a phone, so the
+		     two side tools get named buttons here. -->
+		{#if leftTool && rightTool}
+			<div class="panel-toggles">
+				<button
+					class="panel-toggle"
+					class:on={panelState.leftOpen}
+					style="--tool: {accent[leftTool]}"
+					onclick={toggleLeft}
+					aria-pressed={panelState.leftOpen}
+					title="{panelState.leftOpen ? 'Hide' : 'Show'} {leftTool}"
+				>
+					<span class="dot"></span>{leftTool}
+				</button>
+				<button
+					class="panel-toggle"
+					class:on={panelState.rightOpen}
+					style="--tool: {accent[rightTool]}"
+					onclick={toggleRight}
+					aria-pressed={panelState.rightOpen}
+					title="{panelState.rightOpen ? 'Hide' : 'Show'} {rightTool}"
+				>
+					<span class="dot"></span>{rightTool}
+				</button>
+			</div>
+		{/if}
 	</div>
 
 	<!-- Center: live sync banner -->
@@ -80,6 +117,19 @@
 				<span>Calc</span>
 			</button>
 		{/if}
+
+		<button
+			class="theme-btn"
+			onclick={toggleTheme}
+			aria-label={themeState.theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+			title={themeState.theme === 'dark' ? 'Light mode' : 'Dark mode'}
+		>
+			{#if themeState.theme === 'dark'}
+				<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="2.6" stroke="currentColor" stroke-width="1.2"/><path d="M7 1v1.4M7 11.6V13M1 7h1.4M11.6 7H13M2.8 2.8l1 1M10.2 10.2l1 1M2.8 11.2l1-1M10.2 3.8l1-1" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+			{:else}
+				<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M11.8 8.6A5 5 0 0 1 5.4 2.2a5 5 0 1 0 6.4 6.4z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>
+			{/if}
+		</button>
 
 		<!-- QR button — only show in non-viewer mode -->
 		{#if !isViewerMode}
@@ -166,6 +216,82 @@
 	.left {
 		display: flex;
 		align-items: center;
+		gap: 0.5rem;
+		min-width: 0;
+	}
+
+	.panel-toggles {
+		display: flex;
+		align-items: center;
+		gap: 0.25rem;
+		padding-left: 0.5rem;
+		border-left: 1px solid var(--color-border-subtle);
+	}
+
+	.panel-toggle {
+		display: flex;
+		align-items: center;
+		gap: 0.375rem;
+		background: none;
+		border: 1px solid transparent;
+		border-radius: 6px;
+		color: var(--color-text-secondary);
+		font-family: inherit;
+		font-size: 0.7rem;
+		text-transform: capitalize;
+		cursor: pointer;
+		padding: 0.3rem 0.5rem;
+		height: 26px;
+		transition: color 0.15s, border-color 0.15s, background 0.15s;
+	}
+	.panel-toggle:hover {
+		color: var(--color-text-primary);
+		background: var(--color-bg-hover);
+	}
+	.panel-toggle.on {
+		color: var(--color-text-primary);
+		border-color: color-mix(in srgb, var(--tool) 45%, transparent);
+		background: color-mix(in srgb, var(--tool) 12%, transparent);
+	}
+
+	.dot {
+		width: 6px;
+		height: 6px;
+		border-radius: 50%;
+		background: var(--tool);
+		opacity: 0.45;
+		transition: opacity 0.15s;
+		flex-shrink: 0;
+	}
+	.panel-toggle.on .dot,
+	.panel-toggle:hover .dot { opacity: 1; }
+
+	/* Phones: the QR label and logo wordmark give way so the tool toggles always fit. */
+	@media (max-width: 570px) {
+		.panel-toggle { padding: 0.3rem 0.4rem; }
+		.qr-btn span, .signin-btn span { display: none; }
+		.qr-btn, .signin-btn { padding: 0.3rem 0.5rem; }
+	}
+	@media (max-width: 410px) {
+		.logo-text { display: none; }
+	}
+	/* Smallest phones: the names matter more than the dots and gaps */
+	@media (max-width: 360px) {
+		.panel-toggle .dot { display: none; }
+		.panel-toggles { gap: 0; padding-left: 0.25rem; }
+		.right { gap: 0.125rem; }
+		.theme-btn { width: 26px; }
+	}
+
+	/* The bar is 40px tall, so taps get its full height without moving anything */
+	@media (pointer: coarse) {
+		.logo, .panel-toggle, .nav-btn, .theme-btn, .qr-btn, .signin-btn, .icon-btn { position: relative; }
+		.logo::after, .panel-toggle::after, .nav-btn::after, .theme-btn::after,
+		.qr-btn::after, .signin-btn::after, .icon-btn::after {
+			content: '';
+			position: absolute;
+			inset: -7px -1px;
+		}
 	}
 
 	.logo {
@@ -191,11 +317,25 @@
 		font-weight: 600;
 		letter-spacing: -0.02em;
 	}
+	.theme-btn {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 30px;
+		height: 30px;
+		background: none;
+		border: none;
+		border-radius: 8px;
+		color: var(--color-text-muted);
+		transition: color 0.15s, background 0.15s;
+	}
+	.theme-btn:hover { color: var(--color-text-primary); background: var(--color-bg-hover); }
+
 	.logo-work {
 		color: var(--color-text-primary);
 	}
 	.logo-kit {
-		color: #6c8ebf;
+		color: var(--color-accent);
 	}
 
 	.viewer-banner {
@@ -275,7 +415,7 @@
 		border-color: color-mix(in srgb, var(--color-accent-calc) 40%, transparent);
 		background: color-mix(in srgb, var(--color-accent-calc) 10%, transparent);
 	}
-	@media (max-width: 560px) {
+	@media (max-width: 570px) {
 		.nav-btn span { display: none; }
 	}
 

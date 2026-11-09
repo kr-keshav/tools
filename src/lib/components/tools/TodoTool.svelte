@@ -10,6 +10,8 @@
 		exportTasks,
 		groupActiveTasks,
 		extractDueDate,
+		todayStr,
+		watchDayChange,
 	} from '$lib/stores/todoState.svelte';
 	import TodoSection from '$lib/components/todo/TodoSection.svelte';
 	import TodoCompletedSection from '$lib/components/todo/TodoCompletedSection.svelte';
@@ -17,7 +19,9 @@
 	import TodoTabBar from '$lib/components/todo/TodoTabBar.svelte';
 
 	let showShortcuts = $state(false);
-	let showFilter = $state(false);
+	// Open if a filter survived navigation, so it is never applied with no visible way out.
+	let showFilter = $state(todoUI.filterText.length > 0);
+	let rootEl = $state<HTMLElement | null>(null);
 
 	let addInputEl: HTMLInputElement | null = null;
 	let filterInputEl = $state<HTMLInputElement | null>(null);
@@ -26,40 +30,58 @@
 	// ── Derived views (all scoped to active tab) ───────────────────
 	const tabTasks = $derived(tasks.filter((t) => t.tabId === todoUI.activeTabId));
 	const allTags = $derived([...new Set(tabTasks.flatMap((t) => t.tags))].sort());
+	// A chip disappears with its last task or on a tab without that tag: drop it from the
+	// filter too, or the list stays filtered with nothing left to turn it off.
+	$effect(() => {
+		if (todoUI.activeTags.some((tag) => !allTags.includes(tag))) {
+			todoUI.activeTags = todoUI.activeTags.filter((tag) => allTags.includes(tag));
+		}
+	});
 	const activeTasks = $derived(tabTasks.filter((t) => !t.completed));
 	const completedTasks = $derived(
 		tabTasks.filter((t) => t.completed).sort((a, b) => (b.completedAt ?? 0) - (a.completedAt ?? 0))
 	);
 
-	const filteredActive = $derived.by(() => {
-		let result = tabTasks.filter((t) => !t.completed);
+	$effect(() => watchDayChange());
 
+	const PRIORITY_FILTERS: Record<string, number> = { high: 3, med: 2, medium: 2, low: 1, none: 0 };
+
+	// Half-typed or misspelled operators leave the list alone and say why.
+	const filterHint = $derived.by(() => {
 		const lower = todoUI.filterText.toLowerCase().trim();
-		if (lower) {
+		if (lower.startsWith('p:') && lower.length > 2 && !(lower.slice(2) in PRIORITY_FILTERS)) {
+			return 'Unknown priority, showing all tasks. Try p:high, p:med, p:low or p:none.';
+		}
+		if (/^due:./.test(lower) && lower !== 'due:today' && lower !== 'due:overdue') {
+			return 'Unknown date filter, showing all tasks. Try due:today or due:overdue.';
+		}
+		return '';
+	});
+
+	function matchesFilter(t: (typeof tasks)[number]): boolean {
+		const lower = todoUI.filterText.toLowerCase().trim();
+		let ok = true;
+		if (lower && !filterHint) {
 			if (lower.startsWith('#')) {
 				const tag = lower.slice(1);
-				result = result.filter((t) => t.tags.some((tg) => tg.toLowerCase().includes(tag)));
+				ok = t.tags.some((tg) => tg.toLowerCase().includes(tag));
 			} else if (lower.startsWith('p:')) {
-				const map: Record<string, number> = { high: 3, med: 2, medium: 2, low: 1, none: 0 };
-				const p = map[lower.slice(2)];
-				if (p !== undefined) result = result.filter((t) => t.priority === p);
+				const p = PRIORITY_FILTERS[lower.slice(2)];
+				if (p !== undefined) ok = t.priority === p;
 			} else if (lower === 'due:today') {
-				const today = new Date().toISOString().slice(0, 10);
-				result = result.filter((t) => t.dueDate === today);
+				ok = t.dueDate === todayStr();
 			} else if (lower === 'due:overdue') {
-				const today = new Date().toISOString().slice(0, 10);
-				result = result.filter((t) => t.dueDate && t.dueDate < today);
+				ok = !!t.dueDate && t.dueDate < todayStr();
 			} else {
-				result = result.filter((t) => t.title.toLowerCase().includes(lower));
+				ok = t.title.toLowerCase().includes(lower);
 			}
 		}
+		return ok && todoUI.activeTags.every((tag) => t.tags.includes(tag));
+	}
 
-		if (todoUI.activeTags.length > 0) {
-			result = result.filter((t) => todoUI.activeTags.every((tag) => t.tags.includes(tag)));
-		}
+	const visibleCompleted = $derived(completedTasks.filter(matchesFilter));
 
-		return result;
-	});
+	const filteredActive = $derived(activeTasks.filter(matchesFilter));
 
 	const sections = $derived(groupActiveTasks(filteredActive));
 	const hasAnyTasks = $derived(activeTasks.length > 0 || completedTasks.length > 0);
@@ -70,9 +92,14 @@
 	function submitAdd() {
 		const raw = addDraft.trim();
 		if (!raw) return;
-		const { title, dueDate } = extractDueDate(raw);
-		addTask(title, dueDate);
+		const { title, dueDate, tags, priority } = extractDueDate(raw);
+		addTask(title, dueDate, tags, priority);
 		addDraft = '';
+		// addTask inserts synchronously, so the new task is already last.
+		const newId = tasks[tasks.length - 1]?.id;
+		tick().then(() => {
+			document.querySelector(`[data-task-row="${newId}"]`)?.scrollIntoView({ block: 'nearest' });
+		});
 	}
 
 	// ── Tag filter toggle ─────────────────────────────────────────
@@ -83,30 +110,44 @@
 	}
 
 	// ── Global keyboard handler ───────────────────────────────────
+	function reorderFocused(id: string, direction: 'up' | 'down') {
+		reorderTask(id, direction);
+		tick().then(() => document.querySelector<HTMLElement>(`[data-task-row="${id}"]`)?.focus());
+	}
+
 	function handleGlobalKey(e: KeyboardEvent) {
+		// Stays mounted inside a closed side panel, where it must not react.
+		if (rootEl?.closest('[inert]')) return;
 		const target = e.target as HTMLElement;
 		const isInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable;
 
 		if (e.key === 'Escape') {
 			if (showShortcuts) { showShortcuts = false; return; }
+			if (isInput && target.closest('[data-task-panel]')) { target.blur(); return; }
 			if (showFilter) { showFilter = false; todoUI.filterText = ''; return; }
 			if (todoUI.expandedTaskId) { todoUI.expandedTaskId = null; return; }
 			return;
 		}
 
-		if ((e.ctrlKey || e.metaKey) && e.key === 'z' && todoUI.undoItem) {
+		if (isInput) return;
+
+		if ((e.ctrlKey || e.metaKey) && e.key === 'z' && todoUI.undoItem && !showShortcuts) {
 			e.preventDefault();
 			undo();
 			return;
 		}
 
-		if (isInput) return;
+		// Leave browser shortcuts such as Cmd+P and Cmd+N alone.
+		if (e.ctrlKey || e.metaKey) return;
 
 		if (e.key === '?') {
 			showShortcuts = !showShortcuts;
 			return;
 		}
-		if (e.key === 'n') {
+		if (showShortcuts) return;
+
+		const key = e.key.toLowerCase();
+		if (key === 'n' && !e.altKey) {
 			e.preventDefault();
 			addInputEl?.focus();
 			return;
@@ -120,16 +161,16 @@
 
 		// Task-level fallback shortcuts
 		if (todoUI.focusedTaskId) {
-			if (e.key === 'p') {
+			if (key === 'p' && !e.altKey) {
 				e.preventDefault();
 				const task = tasks.find((t) => t.id === todoUI.focusedTaskId);
 				if (task) updateTask(todoUI.focusedTaskId, { priority: ((task.priority + 1) % 4) as 0 | 1 | 2 | 3 });
 			} else if (e.altKey && e.key === 'ArrowUp') {
 				e.preventDefault();
-				reorderTask(todoUI.focusedTaskId, 'up');
+				reorderFocused(todoUI.focusedTaskId, 'up');
 			} else if (e.altKey && e.key === 'ArrowDown') {
 				e.preventDefault();
-				reorderTask(todoUI.focusedTaskId, 'down');
+				reorderFocused(todoUI.focusedTaskId, 'down');
 			}
 		}
 	}
@@ -137,7 +178,7 @@
 
 <svelte:window onkeydown={handleGlobalKey} />
 
-<div class="flex flex-col h-full relative" aria-label="Todo" role="region">
+<div bind:this={rootEl} class="flex flex-col h-full relative" aria-label="Todo" role="region">
 
 	<!-- ── Tab bar ────────────────────────────────────────────────── -->
 	<div class="px-4 pt-4">
@@ -152,7 +193,7 @@
 				<input
 					bind:this={filterInputEl}
 					bind:value={todoUI.filterText}
-					class="flex-1 bg-transparent border-none outline-none text-xs font-mono
+					class="flex-1 bg-transparent outline-none text-xs
 					       text-text-primary placeholder-text-muted border-b border-accent-todo pb-1
 					       transition-colors duration-150"
 					placeholder="Search or #tag or p:high or due:today…"
@@ -162,20 +203,21 @@
 				/>
 				<button
 					onclick={() => { todoUI.filterText = ''; showFilter = false; }}
-					class="text-text-muted hover:text-text-primary text-xs transition-colors shrink-0"
+					class="hit text-text-muted hover:text-text-primary text-xs transition-colors shrink-0"
+					style="--hit:-12px -8px"
 					aria-label="Clear filter"
 				>✕</button>
 			{:else}
-				<span class="text-xs font-mono text-text-muted flex-1">
+				<span class="text-xs text-text-muted flex-1">
 					{activeTasks.length} task{activeTasks.length !== 1 ? 's' : ''}
 					{#if isFiltered}
-						<span class="text-accent-todo/70"> · filtered</span>
+						<span class="text-accent-todo"> · filtered</span>
 					{/if}
 				</span>
 
 				<button
 					onclick={() => { showFilter = true; tick().then(() => filterInputEl?.focus()); }}
-					class="text-text-muted/50 hover:text-text-muted transition-colors"
+					class="text-text-muted hover:text-text-secondary transition-colors max-sm:min-w-10 max-sm:min-h-10"
 					aria-label="Filter tasks"
 					title="Filter (/)"
 				>
@@ -187,7 +229,7 @@
 
 				<button
 					onclick={exportTasks}
-					class="text-text-muted/50 hover:text-text-muted transition-colors"
+					class="text-text-muted hover:text-text-secondary transition-colors max-sm:min-w-10 max-sm:min-h-10"
 					aria-label="Export tasks as JSON"
 					title="Export JSON"
 				>
@@ -199,12 +241,16 @@
 
 				<button
 					onclick={() => (showShortcuts = true)}
-					class="text-text-muted/50 hover:text-text-muted text-xs font-mono transition-colors"
+					class="text-text-muted hover:text-text-secondary text-xs transition-colors max-sm:min-w-10 max-sm:min-h-10"
 					title="Keyboard shortcuts (?)"
 					aria-label="Show keyboard shortcuts"
 				>?</button>
 			{/if}
 		</div>
+
+		{#if showFilter && filterHint}
+			<p class="text-[0.68rem] text-text-muted -mt-1" role="status">{filterHint}</p>
+		{/if}
 
 		<!-- ── Tag filter bar ───────────────────────────────────────── -->
 		{#if allTags.length > 0}
@@ -212,7 +258,7 @@
 				{#each allTags as tag}
 					<button
 						onclick={() => toggleTagFilter(tag)}
-						class="text-[0.62rem] font-mono px-1.5 py-0.5 rounded border transition-colors duration-100
+						class="text-[0.62rem] px-1.5 py-0.5 rounded border transition-colors duration-100
 						       {todoUI.activeTags.includes(tag)
 							       ? 'border-accent-todo text-accent-todo'
 							       : 'border-border-default text-text-muted hover:text-text-secondary'}"
@@ -232,7 +278,7 @@
 			<input
 				bind:this={addInputEl}
 				bind:value={addDraft}
-				class="flex-1 bg-transparent border-none outline-none text-[0.8rem] font-mono
+				class="flex-1 bg-transparent outline-none text-[0.8rem]
 				       text-text-primary placeholder-text-muted border-b border-border-default
 				       focus:border-accent-todo pb-1.5 transition-colors duration-150"
 				placeholder="Add a task… or 'buy milk tomorrow'"
@@ -265,22 +311,30 @@
 			{/if}
 
 			{#if !hasAnyTasks}
-				<div class="flex-1 flex items-center justify-center text-xs font-mono text-text-muted py-12">
-					All clear — press N to add a task
+				<div class="flex-1 flex items-center justify-center text-xs text-text-muted py-12">
+					All clear —
+					<span class="ml-1 [@media(hover:none)]:hidden">press N to add a task</span>
+					<span class="ml-1 hidden [@media(hover:none)]:inline">add a task above</span>
 				</div>
 			{:else if filteredActive.length === 0 && isFiltered}
-				<div class="flex items-center justify-center text-xs font-mono text-text-muted py-8">
-					No tasks match the filter
+				<div class="flex items-center justify-center text-xs text-text-muted py-8">
+					{visibleCompleted.length > 0
+						? `No open tasks match, ${visibleCompleted.length} in Completed`
+						: 'No tasks match the filter'}
+				</div>
+			{:else if activeTasks.length === 0}
+				<div class="flex items-center justify-center text-xs text-text-muted py-8">
+					Nothing left to do
 				</div>
 			{/if}
 
-			<TodoCompletedSection tasks={completedTasks} />
+			<TodoCompletedSection tasks={visibleCompleted} />
 		</div>
 
 		<!-- ── Undo toast ─────────────────────────────────────────────── -->
 		{#if todoUI.undoItem}
 			<div
-				class="flex items-center gap-2 px-3 py-2 rounded border border-border-default bg-bg-surface text-xs font-mono"
+				class="flex items-center gap-2 px-3 py-2 rounded border border-border-default bg-bg-surface text-xs"
 				role="status"
 				aria-live="polite"
 			>
@@ -289,7 +343,8 @@
 				</span>
 				<button
 					onclick={undo}
-					class="text-accent-todo hover:opacity-80 shrink-0 transition-opacity"
+					style="--hit:-12px -8px"
+					class="hit text-accent-todo hover:opacity-80 shrink-0 transition-opacity"
 				>Undo</button>
 			</div>
 		{/if}
@@ -301,3 +356,11 @@
 		<TodoShortcutOverlay onclose={() => (showShortcuts = false)} />
 	{/if}
 </div>
+
+<style>
+	/* Grow the tap area on touch screens without changing how the control looks. */
+	@media (pointer: coarse) {
+		.hit { position: relative; }
+		.hit::after { content: ''; position: absolute; inset: var(--hit); }
+	}
+</style>

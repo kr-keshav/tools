@@ -14,7 +14,7 @@
 		type CalcLine,
 	} from '$lib/stores/calcState.svelte';
 	import { formatNumber, prepareInput, prettyExpr } from '$lib/calc/engine';
-	import { addTags, highlight, setLabel, splitLine, syntaxError, tagTone, toDisplay, toStored, type LineInfo } from '$lib/calc/tape';
+	import { addTags, highlight, joinLine, setLabel, splitLine, syntaxError, tagTone, toDisplay, toStored, typeOperators, type LineInfo } from '$lib/calc/tape';
 	import { nextCascadeDelay, rise, takeFresh, wash } from '$lib/calc/motion';
 	import CalcRollingValue from './CalcRollingValue.svelte';
 	import { getCalcContext, type CalcField } from './calcContext';
@@ -46,9 +46,17 @@
 
 	let editing = $state(false);
 	let draft = $state('');
+	/** Name and tags stay out of the field while editing, so keys can't land inside them. */
+	let keptName = $state<string | undefined>(undefined);
+	let keptTags = $state<string[]>([]);
+	/** Why Enter was refused; the saved line is untouched until the text parses. */
+	let editError = $state<string | null>(null);
 	let inputEl = $state<HTMLInputElement | null>(null);
 	let copied = $state(false);
 	let menuOpen = $state(false);
+	let menuEl = $state<HTMLDivElement | null>(null);
+	let menuBtn = $state<HTMLButtonElement | null>(null);
+	let menuPos = $state({ top: 0, left: 0, up: false });
 	let noteOpen = $state(false);
 	let noteDraft = $state('');
 	let noteEl = $state<HTMLTextAreaElement | null>(null);
@@ -98,8 +106,12 @@
 	onDestroy(() => ctx.endEdit(editField));
 
 	async function startEdit() {
-		// The label has its own editor, so this field only holds what follows it
-		draft = toDisplay(setLabel(line.input, ''), idIndex);
+		// Label, name and tags are shown beside the field; it holds only the numbers
+		const parts = splitLine(line.input);
+		draft = toDisplay(parts.expr, idIndex);
+		keptName = parts.name;
+		keptTags = parts.tags;
+		editError = null;
 		editing = true;
 		ctx.beginEdit(line.id, editField);
 		await tick();
@@ -108,16 +120,43 @@
 		inputEl?.setSelectionRange(draft.length, draft.length);
 	}
 
-	/** What the line would store for this text, with its saved label still on it. */
+	/** What the line would store for this text, with its label, name and tags back on it. */
 	function toInput(text: string): string {
-		const body = toStored(prepareInput(text), linesOf(line.sheetId));
-		const saved = splitLine(line.input).label;
-		// A label typed into this field on purpose replaces the existing one
-		return saved && !splitLine(body).label ? setLabel(body, saved) : body;
+		const typed = splitLine(toStored(prepareInput(text), linesOf(line.sheetId)));
+		// A label or name typed into this field on purpose replaces the existing one
+		return joinLine({
+			label: typed.label ?? splitLine(line.input).label,
+			name: typed.name ?? keptName,
+			expr: typed.expr,
+			tags: [...new Set([...keptTags, ...typed.tags])],
+		});
+	}
+
+	function handleEditInput(e: Event) {
+		const el = e.currentTarget as HTMLInputElement;
+		const raw = el.value;
+		const next = typeOperators(raw);
+		if (next !== raw) {
+			const pos = (el.selectionStart ?? raw.length) - (raw.length - next.length);
+			el.value = next;
+			el.setSelectionRange(pos, pos);
+		}
+		setDraft(next);
+	}
+
+	function dropName() {
+		keptName = undefined;
+		setDraft(draft);
+	}
+
+	function dropTag(tag: string) {
+		keptTags = keptTags.filter((t) => t !== tag);
+		setDraft(draft);
 	}
 
 	function setDraft(next: string) {
 		draft = next;
+		editError = null;
 		const text = next.trim();
 		// Half-typed expressions like `25+` keep showing the last result that made sense
 		if (!text) ctx.previewEdit(line.input);
@@ -126,15 +165,28 @@
 
 	function stopEdit() {
 		editing = false;
+		editError = null;
 		ctx.endEdit(editField);
 	}
 
 	function commit() {
 		if (!editing) return;
 		const next = draft.trim();
+		// A half-typed line must not replace a good one: stay here and say why
+		const err = next ? syntaxError(prepareInput(next)) : null;
+		if (err) {
+			editError = err;
+			return;
+		}
 		stopEdit();
 		// Emptying the field (AC is one tap away) leaves the line alone; deleting is in the ⋯ menu
 		if (next) updateLine(line.id, { input: toInput(next) });
+	}
+
+	/** Leaving the field can't ask a question, so text that doesn't parse is abandoned. */
+	function handleBlur() {
+		if (draft.trim() && syntaxError(prepareInput(draft.trim()))) stopEdit();
+		else commit();
 	}
 
 	function handleKey(e: KeyboardEvent) {
@@ -216,6 +268,36 @@
 		if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); commitNote(); }
 	}
 
+	/** Fixed to the viewport, because the tape's scroller would clip it; flips up near the bottom. */
+	async function toggleMenu() {
+		menuOpen = !menuOpen;
+		if (!menuOpen) return;
+		await tick();
+		if (!menuEl || !menuBtn) return;
+		const btn = menuBtn.getBoundingClientRect();
+		const { offsetWidth: w, offsetHeight: h } = menuEl;
+		const up = btn.bottom + 4 + h > window.innerHeight - 8 && btn.top - 4 - h >= 8;
+		menuPos = {
+			top: up ? btn.top - 4 - h : Math.max(8, Math.min(btn.bottom + 4, window.innerHeight - 8 - h)),
+			left: Math.max(8, Math.min(btn.right - w, window.innerWidth - 8 - w)),
+			up,
+		};
+	}
+
+	// A fixed menu would float away from its row, so scrolling or resizing closes it
+	$effect(() => {
+		if (!menuOpen) return;
+		const close = (e: Event) => {
+			if (!menuEl?.contains(e.target as Node)) menuOpen = false;
+		};
+		window.addEventListener('scroll', close, true);
+		window.addEventListener('resize', close);
+		return () => {
+			window.removeEventListener('scroll', close, true);
+			window.removeEventListener('resize', close);
+		};
+	});
+
 	function menuAction(fn: () => void) {
 		menuOpen = false;
 		fn();
@@ -274,19 +356,47 @@
 				<button class="label" onclick={startLabel} title="Edit label">{info.label}</button>
 			{/if}
 			{#if editing}
+				{#if keptName}
+					<button
+						class="kept-name"
+						tabindex="-1"
+						onpointerdown={(e) => e.preventDefault()}
+						onmousedown={(e) => e.preventDefault()}
+						onclick={dropName}
+						title="Remove the name {keptName}"
+					>{keptName}<span class="eq">=</span></button>
+				{/if}
 				<input
 					class="expr-input"
+					class:invalid={editError}
 					bind:this={inputEl}
 					value={draft}
-					oninput={(e) => setDraft(e.currentTarget.value)}
+					oninput={handleEditInput}
 					onkeydown={handleKey}
-					onblur={commit}
+					onblur={handleBlur}
+					aria-invalid={editError ? 'true' : undefined}
 					inputmode={calcUI.keypadOpen ? 'none' : 'text'}
 					spellcheck="false"
 					autocomplete="off"
 					autocapitalize="off"
 					aria-label="Edit line {index + 1}"
 				/>
+				{#if keptTags.length > 0}
+					<span class="tags">
+						{#each keptTags as tag (tag)}
+							<button
+								class="tag"
+								tabindex="-1"
+								style:--tag-bg="var(--tag-{tagTone(tag)}-bg)"
+								style:--tag-fg="var(--tag-{tagTone(tag)}-fg)"
+								onpointerdown={(e) => e.preventDefault()}
+								onmousedown={(e) => e.preventDefault()}
+								onclick={() => dropTag(tag)}
+								title="Remove #{tag}"
+							>#{tag} ×</button>
+						{/each}
+					</span>
+				{/if}
 			{:else}
 				<button class="expr-btn" onclick={startEdit} title="Edit — lines that use this one recalculate">
 					{#if info.name}<span class="def">{info.name}</span><span class="eq">=</span>{/if}{#each segments as seg, i (i)}{#if seg.kind === 'text'}{prettyExpr(seg.text)}{:else}<span class="seg-{seg.kind}">{seg.text}</span>{/if}{/each}
@@ -333,10 +443,15 @@
 		</div>
 
 		<div class="result">
-			{#if info.value !== undefined}
+			{#if editError}
+				<span class="err" role="alert" title={editError}>{editError}</span>
+			{:else if info.value !== undefined}
+				<!-- Keeps focus in a line being edited, so the reference lands there -->
 				<button
 					class="value"
-					onclick={() => onUse(refText)}
+					onpointerdown={(e) => e.preventDefault()}
+					onmousedown={(e) => e.preventDefault()}
+					onclick={() => { if (!editing) onUse(refText); }}
 					title="Insert {refText} — a live link that updates when this line changes"
 				><CalcRollingValue text={formatNumber(info.value)} delay={rollDelay} /></button>
 			{:else}
@@ -360,7 +475,8 @@
 			</button>
 			<button
 				class="act"
-				onclick={() => (menuOpen = !menuOpen)}
+				bind:this={menuBtn}
+				onclick={toggleMenu}
 				aria-haspopup="menu"
 				aria-expanded={menuOpen}
 				aria-label="More actions"
@@ -371,7 +487,14 @@
 		</div>
 
 		{#if menuOpen}
-			<div class="menu" role="menu">
+			<div
+				class="menu"
+				class:up={menuPos.up}
+				role="menu"
+				bind:this={menuEl}
+				style:top="{menuPos.top}px"
+				style:left="{menuPos.left}px"
+			>
 				<button role="menuitem" onclick={startLabel}>{info.label ? 'Edit label' : 'Add label'}</button>
 				<button role="menuitem" onclick={startTag}>Add tag</button>
 				{#if depth === 0}
@@ -445,7 +568,7 @@
 
 	.idx {
 		font-size: 0.65rem;
-		color: var(--color-text-faint);
+		color: var(--color-text-muted);
 		text-align: right;
 		font-variant-numeric: tabular-nums;
 	}
@@ -489,6 +612,7 @@
 		overflow: hidden;
 		text-overflow: ellipsis;
 		cursor: text;
+		border-radius: 4px;
 	}
 	.expr-btn:hover { color: var(--color-text-primary); }
 
@@ -535,7 +659,9 @@
 		.add-label { display: none; }
 	}
 	.def { color: var(--color-text-primary); font-weight: 700; }
-	.eq  { color: var(--color-text-faint); margin: 0 0.45em; }
+	.eq  { color: var(--color-text-muted); margin: 0 0.45em; }
+	/* The tape scrolls, which would clip an outer ring on its first and last rows */
+	.row button:focus-visible, .note:focus-visible { outline-offset: -2px; }
 	.seg-var { color: var(--color-text-primary); }
 	.seg-ref { color: var(--color-accent-calc); }
 	.seg-tag { color: var(--color-accent-calc); }
@@ -567,7 +693,10 @@
 		color: var(--tag-fg);
 		transition: filter 0.1s;
 	}
-	.tag:hover, .tag.on { filter: brightness(0.94); }
+	.tag.on { filter: brightness(0.94); }
+	@media (hover: hover) {
+		.tag:hover { box-shadow: inset 0 0 0 1px var(--tag-fg); }
+	}
 
 	.expr input {
 		width: 100%;
@@ -582,6 +711,18 @@
 	}
 	.expr input:focus { border-color: var(--color-accent); }
 	.expr .expr-input { flex: 1; min-width: 0; caret-color: var(--color-accent-calc); }
+	.expr .expr-input.invalid { border-color: var(--color-danger); }
+	.kept-name {
+		flex-shrink: 0;
+		background: none;
+		border: none;
+		padding: 0;
+		font-family: inherit;
+		font-size: 0.8rem;
+		font-weight: 700;
+		color: var(--color-text-primary);
+	}
+	.kept-name:hover { text-decoration: line-through; }
 	.expr .tag-input { flex: 0 1 8rem; width: 8rem; min-width: 0; }
 
 	/* The line being edited is the calculator's display for now */
@@ -650,11 +791,11 @@
 	.act:disabled { opacity: 0.3; cursor: default; }
 
 	.menu {
-		position: absolute;
-		top: calc(100% - 4px);
-		right: 0.5rem;
+		position: fixed;
 		z-index: 20;
 		min-width: 190px;
+		max-height: calc(100dvh - 16px);
+		overflow-y: auto;
 		padding: 0.3rem;
 		background: var(--color-bg-surface);
 		border: 1px solid var(--color-border-default);
@@ -663,6 +804,8 @@
 		animation: pop 420ms var(--ease-spring) backwards;
 		transform-origin: top right;
 	}
+	.menu.up { transform-origin: bottom right; }
+	.menu button:focus-visible { outline-offset: -2px; }
 	@keyframes pop {
 		from { transform: scale(0.85); opacity: 0; }
 	}
@@ -715,9 +858,18 @@
 	}
 	.note-edit textarea:focus { border-color: color-mix(in srgb, var(--color-accent-calc) 60%, transparent); }
 
+	@media (pointer: coarse) {
+		.value { position: relative; }
+		.value::after { content: ''; position: absolute; left: 0; right: 0; top: 50%; height: 40px; transform: translateY(-50%); }
+	}
+
 	/* Phones: tags drop under the expression so the result keeps its width */
 	@media (max-width: 560px) {
 		.expr { flex-wrap: wrap; row-gap: 0; }
 		.tags { padding-bottom: 0.375rem; }
+		/* A line's tags wrap under the field rather than squeezing it */
+		.expr .expr-input { flex-basis: 7rem; }
+		.act { position: relative; }
+		.act::after { content: ''; position: absolute; inset: -8px -2px; }
 	}
 </style>

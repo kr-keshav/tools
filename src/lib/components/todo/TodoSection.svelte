@@ -12,7 +12,7 @@
 
 	const labelClass = $derived(
 		accent === 'overdue'
-			? 'text-[#c77171]'
+			? 'text-danger'
 			: accent === 'today'
 				? 'text-accent-todo'
 				: 'text-text-muted'
@@ -21,15 +21,16 @@
 
 <div>
 	<button
-		class="flex items-center gap-2 w-full py-1 mb-1 text-left transition-colors group"
+		style="--hit:-12px 0 -4px"
+		class="hit flex items-center gap-2 w-full py-1 mb-1 text-left transition-colors group focus-visible:-outline-offset-2"
 		onclick={() => (collapsed = !collapsed)}
 		aria-expanded={!collapsed}
 	>
-		<span class="text-[0.62rem] uppercase tracking-widest font-mono {labelClass} transition-colors">
+		<span class="text-[0.62rem] uppercase tracking-widest {labelClass} transition-colors">
 			{title}
 		</span>
-		<span class="text-[0.62rem] text-text-muted/50">{tasks.length}</span>
-		<span class="ml-auto text-[0.55rem] text-text-muted/30 group-hover:text-text-muted/60 transition-colors">
+		<span class="text-[0.62rem] text-text-muted">{tasks.length}</span>
+		<span class="ml-auto text-[0.55rem] text-text-muted group-hover:text-text-secondary transition-colors">
 			{collapsed ? '▸' : '▾'}
 		</span>
 	</button>
@@ -42,3 +43,11 @@
 		</ul>
 	{/if}
 </div>
+
+<style>
+	/* Grow the tap area on touch screens without changing how the control looks. */
+	@media (pointer: coarse) {
+		.hit { position: relative; }
+		.hit::after { content: ''; position: absolute; inset: var(--hit); }
+	}
+</style>

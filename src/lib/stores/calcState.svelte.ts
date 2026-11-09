@@ -21,10 +21,10 @@ export let calcLines  = $state<CalcLine[]>([]);
 
 const PREFS_KEY = 'workkit-calc-prefs';
 
-type CalcPrefs = { mode: 'basic' | 'sci'; angle: AngleMode; keypadOpen: boolean; activeSheetId: string; theme: 'light' | 'dark' };
+type CalcPrefs = { mode: 'basic' | 'sci'; angle: AngleMode; keypadOpen: boolean; activeSheetId: string };
 
 function readPrefs(): CalcPrefs {
-	const fallback: CalcPrefs = { mode: 'basic', angle: 'deg', keypadOpen: true, activeSheetId: 'default', theme: 'light' };
+	const fallback: CalcPrefs = { mode: 'basic', angle: 'deg', keypadOpen: true, activeSheetId: 'default' };
 	if (!browser) return fallback;
 	try {
 		return { ...fallback, ...JSON.parse(localStorage.getItem(PREFS_KEY) ?? '{}') };
@@ -52,8 +52,8 @@ export let calcUI = $state<CalcPrefs & {
 
 export function saveCalcPrefs() {
 	if (!browser) return;
-	const { mode, angle, keypadOpen, activeSheetId, theme } = calcUI;
-	try { localStorage.setItem(PREFS_KEY, JSON.stringify({ mode, angle, keypadOpen, activeSheetId, theme })); } catch { /* ignore */ }
+	const { mode, angle, keypadOpen, activeSheetId } = calcUI;
+	try { localStorage.setItem(PREFS_KEY, JSON.stringify({ mode, angle, keypadOpen, activeSheetId })); } catch { /* ignore */ }
 }
 
 let _userId = '';
@@ -286,8 +286,10 @@ export async function addLine(input: string, sheetId = calcUI.activeSheetId): Pr
 		updatedAt: now,
 	};
 	calcLines.push(line);
+	// Started first so the sub-calc appears now, not after the server acknowledges the line
+	const sub = ensureSubSheet(line);
 	if (_userId) await setDoc(lineDoc(_userId, line.id), line);
-	await ensureSubSheet(line);
+	await sub;
 	return line;
 }
 
@@ -297,12 +299,13 @@ export async function updateLine(id: string, patch: Partial<Pick<CalcLine, 'inpu
 	const changed = (Object.keys(patch) as (keyof typeof patch)[]).some(k => line[k] !== patch[k]);
 	if (!changed) return;
 	Object.assign(line, patch, { updatedAt: Date.now() });
+	const sub = patch.input !== undefined ? ensureSubSheet(line) : undefined;
 	if (_userId) {
 		// Firestore rejects undefined; clearing a field is written as null and read back as unset
 		const write = Object.fromEntries(Object.entries(patch).map(([k, v]) => [k, v ?? null]));
 		await updateDoc(lineDoc(_userId, id), { ...write, updatedAt: line.updatedAt });
 	}
-	if (patch.input !== undefined) await ensureSubSheet(line);
+	await sub;
 }
 
 export async function deleteLine(id: string) {
@@ -351,8 +354,10 @@ async function createSheetFor(line: CalcLine, firstInput?: string): Promise<Calc
 	};
 	calcSheets.push(sheet);
 	calcUI.expanded[line.id] = true;
-	if (_userId) await setDoc(sheetDoc(_userId, sheet.id), sheet);
-	if (firstInput) await addLine(firstInput, sheet.id);
+	await Promise.all([
+		_userId ? setDoc(sheetDoc(_userId, sheet.id), sheet) : undefined,
+		firstInput ? addLine(firstInput, sheet.id) : undefined,
+	]);
 	return sheet;
 }
 
@@ -370,10 +375,10 @@ export async function breakIntoSubCalc(lineId: string) {
 	const line = calcLines.find(l => l.id === lineId);
 	if (!line || !canBreakOut(line)) return;
 	const { label, name, expr, tags } = splitLine(line.input);
-	await createSheetFor(line, expr);
+	const created = createSheetFor(line, expr);
 	const head = [label ? `${label}: ` : '', name ? `${name} = ` : ''].join('');
 	const tail = tags.map(t => ` #${t}`).join('');
-	await updateLine(lineId, { input: `${head}sub${tail}` });
+	await Promise.all([created, updateLine(lineId, { input: `${head}sub${tail}` })]);
 }
 
 export function toggleExpanded(lineId: string) {

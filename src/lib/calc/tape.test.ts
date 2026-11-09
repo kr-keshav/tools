@@ -5,9 +5,13 @@ import {
 	evaluateTape,
 	highlight,
 	indexById,
+	joinLine,
+	mapExpr,
+	negateExpr,
 	setLabel,
 	splitLine,
 	tagTone,
+	typeOperators,
 	summarizeTags,
 	syntaxError,
 	toDisplay,
@@ -33,6 +37,40 @@ describe('splitLine', () => {
 		expect(splitLine('Q3 2026 (est): 100').label).toBe('Q3 2026 (est)');
 		expect(splitLine('sum(@1:@5)').label).toBeUndefined();
 		expect(splitLine('@1:@5').label).toBeUndefined();
+	});
+});
+
+describe('line parts', () => {
+	it('accepts labels in any script, and emoji, but not bare numbers', () => {
+		expect(splitLine('दूध: 40')).toEqual({ label: 'दूध', expr: '40', tags: [] });
+		expect(splitLine('🍕: 40').label).toBe('🍕');
+		expect(splitLine('🇮🇳: 40').label).toBe('🇮🇳');
+		expect(setLabel('40', 'दूध')).toBe('दूध: 40');
+		expect(setLabel('40', '🍕')).toBe('🍕: 40');
+		expect(setLabel('40', '2026')).toBe('40');
+	});
+
+	it('joinLine rebuilds what splitLine took apart', () => {
+		for (const input of ['Rent: rent = 25000 #home', '450+380 #food', 'x = 5', 'Tea: 40']) {
+			expect(joinLine(splitLine(input))).toBe(input);
+		}
+	});
+
+	it('mapExpr touches only the expression', () => {
+		expect(mapExpr('Base: x = 5 #a #b', negateExpr)).toBe('Base: x = -(5) #a #b');
+		expect(mapExpr('450+380 #food', (e) => `1÷(${e})`)).toBe('1÷(450+380) #food');
+		expect(mapExpr('Rent: ', negateExpr)).toBe('Rent: ');
+	});
+
+	it('negateExpr toggles, and leaves separate groups alone', () => {
+		expect(negateExpr('-(5+1)')).toBe('5+1');
+		expect(negateExpr('-(1)+(2)')).toBe('-(-(1)+(2))');
+	});
+
+	it('typeOperators converts the expression but not the label', () => {
+		expect(typeOperators('5*2/3')).toBe('5×2÷3');
+		expect(typeOperators('2**3')).toBe('2^3');
+		expect(typeOperators('Swiggy/Zomato: 5*2')).toBe('Swiggy/Zomato: 5×2');
 	});
 });
 
@@ -192,6 +230,14 @@ describe('summarizeTags', () => {
 			{ tag: 'a', total: 0.3, count: 2, errors: 0 },
 			{ tag: 'b', total: 0.2, count: 2, errors: 1 },
 		]);
+	});
+});
+
+describe('summarizeTags self-reference', () => {
+	it('does not count a line that totals its own tag', () => {
+		const [a] = summarizeTags(run('100 #a', '200 #a', 'sum(#a) #a'));
+		expect(a.total).toBe(300);
+		expect(a.count).toBe(3);
 	});
 });
 

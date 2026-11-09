@@ -1,3 +1,4 @@
+import { reportWriteError } from './syncNotice.svelte';
 import { browser } from '$app/environment';
 import { firestore } from '$lib/firebase';
 import {
@@ -11,18 +12,20 @@ export type { Note, NoteVersion };
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
+// Saved notes store only `key`. `bg` tints the accent over the theme surface, so note
+// text stays readable in both light and dark.
 export const NOTE_COLORS = [
-	{ key: 'red',    bg: '#2a1a1a', accent: '#c77171' },
-	{ key: 'amber',  bg: '#261e12', accent: '#c79f71' },
-	{ key: 'yellow', bg: '#252511', accent: '#c7c071' },
-	{ key: 'green',  bg: '#182618', accent: '#82b366' },
-	{ key: 'blue',   bg: '#151e2a', accent: '#6c8ebf' },
-	{ key: 'purple', bg: '#221a2a', accent: '#9b71c7' },
+	{ key: 'red',    bg: 'color-mix(in srgb, #c77171 16%, var(--color-bg-surface))', accent: '#c77171' },
+	{ key: 'amber',  bg: 'color-mix(in srgb, #c79f71 16%, var(--color-bg-surface))', accent: '#c79f71' },
+	{ key: 'yellow', bg: 'color-mix(in srgb, #c7c071 16%, var(--color-bg-surface))', accent: '#c7c071' },
+	{ key: 'green',  bg: 'color-mix(in srgb, #82b366 16%, var(--color-bg-surface))', accent: '#82b366' },
+	{ key: 'blue',   bg: 'color-mix(in srgb, #6c8ebf 16%, var(--color-bg-surface))', accent: '#6c8ebf' },
+	{ key: 'purple', bg: 'color-mix(in srgb, #9b71c7 16%, var(--color-bg-surface))', accent: '#9b71c7' },
 ] as const;
 
 export const NOTE_TEMPLATES = [
 	{ name: 'Blank',         icon: '○', title: '',               body: '' },
-	{ name: 'Meeting Notes', icon: '◉', title: 'Meeting Notes',  body: '## Agenda\n\n- \n\n## Attendees\n\n- \n\n## Notes\n\n\n\n## Action Items\n\n- [ ] ' },
+	{ name: 'Meeting Notes', icon: '◉', title: 'Meeting Notes',  body: '## Agenda\n\n- \n\n## Attendees\n\n- \n\n## Notes\n\n\n\n## Action Items\n\n- [ ] First action' },
 	{ name: 'Daily Journal', icon: '◈', title: '',               body: '## Morning\n\n\n\n## Highlights\n\n- \n\n## Reflection\n\n\n\n## Tomorrow\n\n- ' },
 	{ name: 'Standup',       icon: '◇', title: 'Daily Standup',  body: '## Yesterday\n\n- \n\n## Today\n\n- \n\n## Blockers\n\n- ' },
 	{ name: 'Project Brief', icon: '◰', title: 'Project Brief',  body: '## Overview\n\n\n\n## Goals\n\n- \n\n## Non-Goals\n\n- \n\n## Timeline\n\n\n\n## Resources\n\n- ' },
@@ -38,10 +41,12 @@ export let notesUI = $state<{
 	selectedFolder: string | null;
 	selectedTag: string | null;
 	sortBy: 'updatedAt' | 'createdAt' | 'title';
-	saveStatus: 'saved' | 'saving' | 'unsaved';
+	saveStatus: 'saved' | 'saving' | 'unsaved' | 'offline';
 	undoNote: Note | null;
 	isLoading: boolean;
 	focusSearchTick: number;
+	/** Distraction-free writing: hides the sidebar and every bit of editor chrome. */
+	zenMode: boolean;
 }>({
 	activeNoteId: null,
 	searchQuery: '',
@@ -52,12 +57,16 @@ export let notesUI = $state<{
 	undoNote: null,
 	isLoading: true,
 	focusSearchTick: 0,
+	zenMode: false,
 });
 
 let _userId = '';
 let _unsub: Unsubscribe | null = null;
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 let undoTimer: ReturnType<typeof setTimeout> | null = null;
+let pendingSaveId: string | null = null;
+let saveSeq = 0;
+const SAVE_ACK_TIMEOUT = 5000;
 
 // ── Private derived ────────────────────────────────────────────────────────
 
@@ -119,7 +128,7 @@ export function getVisibleNotes(): Note[] {
 		list = list.filter(n => n.tags.includes(notesUI.selectedTag!));
 
 	if (notesUI.searchQuery.trim()) {
-		const q = notesUI.searchQuery.toLowerCase();
+		const q = notesUI.searchQuery.trim().replace(/^#/, '').toLowerCase();
 		list = list.filter(n =>
 			n.title.toLowerCase().includes(q) ||
 			n.body.toLowerCase().includes(q)  ||
@@ -141,6 +150,10 @@ export function loadNotes(userId: string) {
 	if (!browser || _userId === userId) return;
 	_userId = userId;
 	notesUI.isLoading = true;
+	// A ?view= session is looking at someone else's notes: never store or restore drafts there.
+	_draftsEnabled = !new URLSearchParams(location.search).has('view');
+	_draftsReconciled = false;
+	hookPageHide();
 
 	// Unsubscribe any previous listener
 	_unsub?.();
@@ -162,15 +175,31 @@ export function loadNotes(userId: string) {
 			}
 		}
 		notesUI.isLoading = false;
-		// Select most-recent note on first load
-		if (!notesUI.activeNoteId && _liveNotes.length > 0) {
+		// Only the server can say whether a draft is still newer; a cache-only snapshot can't.
+		if (!_draftsReconciled && !snapshot.metadata.fromCache) {
+			_draftsReconciled = true;
+			restoreNoteDrafts();
+		}
+		// Select most-recent note on first load (the Trash view may legitimately have none)
+		if (!notesUI.activeNoteId && notesUI.selectedFolder !== '__trash__' && _liveNotes.length > 0) {
 			const first = [..._liveNotes].sort((a, b) => b.updatedAt - a.updatedAt)[0];
 			notesUI.activeNoteId = first.id;
 		}
+	}, (err) => {
+		// e.g. rules or quota: without this the panel sits on "Loading..." forever.
+		console.error('Notes listener failed', err);
+		notesUI.isLoading = false;
 	});
 }
 
 export function unloadNotes() {
+	if (saveTimer) {
+		// The session is ending, so this can't be sent; keep it for the next load instead.
+		clearTimeout(saveTimer);
+		saveTimer = null;
+		const pending = notes.find(n => n.id === pendingSaveId);
+		if (pending) saveDraft(pending);
+	}
 	_unsub?.();
 	_unsub    = null;
 	_userId   = '';
@@ -225,13 +254,20 @@ export function updateActiveNoteField(field: keyof Note, value: unknown) {
 export async function selectNote(id: string) {
 	if (id === notesUI.activeNoteId) return;
 	// Flush pending save immediately
-	if (saveTimer) {
-		clearTimeout(saveTimer);
-		saveTimer = null;
-		await flushSave(notesUI.activeNoteId);
-	}
+	flushPendingSave();
 	notesUI.activeNoteId = id;
-	notesUI.searchQuery  = '';
+}
+
+/** Switch the list between All Notes (null), a folder, or Trash, keeping the editor in step with it. */
+export function showFolder(folder: string | null) {
+	const wasTrash = notesUI.selectedFolder === '__trash__';
+	notesUI.selectedFolder = folder;
+	notesUI.selectedTag = null;
+	const isTrash = folder === '__trash__';
+	if (wasTrash === isTrash) return;
+	flushPendingSave();
+	// A note from the other side must not stay open once the list no longer contains it.
+	notesUI.activeNoteId = getVisibleNotes()[0]?.id ?? null;
 }
 
 export async function deleteNote(id: string) {
@@ -336,11 +372,89 @@ export async function setFolder(id: string, folder: string | null) {
 
 export function queueSave() {
 	notesUI.saveStatus = 'unsaved';
+	// The timer below only remembers one note, so don't let a different one replace it.
+	if (saveTimer && pendingSaveId !== notesUI.activeNoteId) flushPendingSave();
 	if (saveTimer) clearTimeout(saveTimer);
+	pendingSaveId = notesUI.activeNoteId;
 	saveTimer = setTimeout(async () => {
 		saveTimer = null;
-		await flushSave(notesUI.activeNoteId);
+		await flushSave(pendingSaveId);
 	}, 600);
+}
+
+function flushPendingSave() {
+	if (!saveTimer) return;
+	clearTimeout(saveTimer);
+	saveTimer = null;
+	// Not awaited: an offline write never resolves, and nothing here can wait on it.
+	void flushSave(pendingSaveId);
+}
+
+// ── Unsaved drafts ─────────────────────────────────────────────────────────
+// A write started while the page unloads may never reach the server. A copy stays in
+// localStorage from before the write until the server acknowledges it, and the next load
+// restores it only if it is still newer than the server's note. Keyed by account.
+
+interface NoteDraft { title: string; body: string; updatedAt: number; }
+
+let _draftsEnabled = false;
+let _draftsReconciled = false;
+let _pageHideHooked = false;
+
+function draftsKey() { return `workkit-note-drafts:${_userId}`; }
+
+function readDrafts(): Record<string, NoteDraft> {
+	try { return JSON.parse(localStorage.getItem(draftsKey()) ?? '{}'); } catch { return {}; }
+}
+
+function writeDrafts(drafts: Record<string, NoteDraft>) {
+	try {
+		if (Object.keys(drafts).length) localStorage.setItem(draftsKey(), JSON.stringify(drafts));
+		else localStorage.removeItem(draftsKey());
+	} catch { /* storage full or blocked: the normal save still runs */ }
+}
+
+function saveDraft(note: Note) {
+	if (!_draftsEnabled || !_userId) return;
+	const drafts = readDrafts();
+	drafts[note.id] = { title: note.title, body: note.body, updatedAt: note.updatedAt };
+	writeDrafts(drafts);
+}
+
+function clearDraft(id: string, savedAt: number) {
+	if (!_draftsEnabled || !_userId) return;
+	const drafts = readDrafts();
+	if (!drafts[id] || drafts[id].updatedAt > savedAt) return;
+	delete drafts[id];
+	writeDrafts(drafts);
+}
+
+/** Apply leftover drafts that beat the server's copy and drop the rest. Needs server-fresh `notes`. */
+export function restoreNoteDrafts() {
+	if (!_draftsEnabled || !_userId) return;
+	const drafts = readDrafts();
+	const restored: string[] = [];
+	for (const [id, draft] of Object.entries(drafts)) {
+		const note = notes.find(n => n.id === id);
+		if (note && !note.deletedAt && draft.updatedAt > note.updatedAt) {
+			Object.assign(note, draft);
+			restored.push(id);
+		} else {
+			delete drafts[id];
+		}
+	}
+	writeDrafts(drafts);
+	// Each restored draft is cleared by its own save, once acknowledged.
+	for (const id of restored) void flushSave(id);
+}
+
+function hookPageHide() {
+	if (_pageHideHooked) return;
+	_pageHideHooked = true;
+	document.addEventListener('visibilitychange', () => {
+		if (document.visibilityState === 'hidden') flushPendingSave();
+	});
+	window.addEventListener('pagehide', flushPendingSave);
 }
 
 async function flushSave(id: string | null) {
@@ -348,16 +462,31 @@ async function flushSave(id: string | null) {
 	const note = notes.find(n => n.id === id);
 	if (!note) return;
 	notesUI.saveStatus = 'saving';
+	const seq = ++saveSeq;
+	saveDraft(note);
+	const savedAt = note.updatedAt;
+	// Ignore a result once newer typing or a newer save owns the status.
+	const setStatus = (status: 'saved' | 'unsaved' | 'offline') => {
+		if (seq === saveSeq && !saveTimer) notesUI.saveStatus = status;
+	};
+	const write = updateDoc(noteDoc(_userId, id), {
+		title:     note.title,
+		body:      note.body,
+		updatedAt: note.updatedAt,
+	});
+	// Firestore holds offline writes and resolves only when the server acknowledges them.
+	const offlineTimer = setTimeout(() => setStatus('offline'), SAVE_ACK_TIMEOUT);
 	try {
-		await updateDoc(noteDoc(_userId, id), {
-			title:     note.title,
-			body:      note.body,
-			updatedAt: note.updatedAt,
-		});
-		await maybeSaveVersion({ ...note });
-		notesUI.saveStatus = 'saved';
-	} catch {
-		notesUI.saveStatus = 'unsaved';
+		await write;
+		setStatus('saved');
+		clearDraft(id, savedAt);
+		// A failed history snapshot isn't a failed save.
+		maybeSaveVersion({ ...note }).catch(() => {});
+	} catch (e) {
+		reportWriteError(e);
+		setStatus('unsaved');
+	} finally {
+		clearTimeout(offlineTimer);
 	}
 }
 
@@ -403,18 +532,18 @@ export async function restoreVersion(noteId: string, version: NoteVersion) {
 	notes[idx].title     = version.title;
 	notes[idx].body      = version.body;
 	notes[idx].updatedAt = Date.now();
-	if (_userId) await updateDoc(noteDoc(_userId, noteId), {
-		title: version.title, body: version.body, updatedAt: notes[idx].updatedAt,
-	});
 	notesUI.saveStatus = 'saved';
+	// Not awaited, so the modal can close while offline; Firestore delivers it later.
+	if (_userId) updateDoc(noteDoc(_userId, noteId), {
+		title: version.title, body: version.body, updatedAt: notes[idx].updatedAt,
+	}).catch((e) => { notesUI.saveStatus = 'unsaved'; reportWriteError(e); });
 }
 
 // ── Export / Import ────────────────────────────────────────────────────────
 
 export function exportNote(note: Note, format: 'md' | 'txt') {
-	const content = format === 'md'
-		? `# ${note.title}\n\n${note.body}`
-		: `${note.title}\n\n${note.body}`;
+	const heading = !note.title ? '' : format === 'md' ? `# ${note.title}\n\n` : `${note.title}\n\n`;
+	const content = heading + note.body;
 	const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
 	const a    = document.createElement('a');
 	a.href     = URL.createObjectURL(blob);
@@ -445,6 +574,8 @@ export function relativeTime(ts: number): string {
 
 export function stripMarkdown(text: string): string {
 	return text
+		.replace(/^\|[\s:|-]*\|\s*$/gm, '')
+		.replace(/^\|(.*)\|\s*$/gm, (_, row: string) => row.replace(/\|/g, ' '))
 		.replace(/#{1,6}\s/g, '')
 		.replace(/\*\*(.+?)\*\*/g, '$1')
 		.replace(/\*(.+?)\*/g, '$1')

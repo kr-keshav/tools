@@ -16,7 +16,7 @@
 		QRCode.toDataURL(shareUrl, {
 			width: 220,
 			margin: 2,
-			color: { dark: '#e0e0e0', light: '#141414' },
+			color: { dark: '#171a2b', light: '#ffffff' },
 			errorCorrectionLevel: 'M',
 		}).then((url) => {
 			qrDataUrl = url;
@@ -37,8 +37,25 @@
 		if (e.target === e.currentTarget) onClose();
 	}
 
+	let modalEl = $state<HTMLElement | null>(null);
+
+	// Take focus on open and give it back on close
+	$effect(() => {
+		const opener = document.activeElement as HTMLElement | null;
+		modalEl?.querySelector('button')?.focus();
+		return () => opener?.focus();
+	});
+
 	function handleKey(e: KeyboardEvent) {
 		if (e.key === 'Escape') onClose();
+		if (e.key !== 'Tab' || !modalEl) return;
+		// Keep Tab inside the dialog
+		const items = [...modalEl.querySelectorAll<HTMLElement>('button, a[href], input')];
+		const first = items[0];
+		const last = items[items.length - 1];
+		const active = document.activeElement;
+		if (e.shiftKey && active === first) { e.preventDefault(); last?.focus(); }
+		else if (!e.shiftKey && active === last) { e.preventDefault(); first?.focus(); }
 	}
 </script>
 
@@ -52,7 +69,7 @@
 	aria-modal="true"
 	aria-label="Share via QR code"
 >
-	<div class="modal">
+	<div class="modal" bind:this={modalEl}>
 		<!-- Header -->
 		<div class="modal-header">
 			<div class="modal-title">
@@ -182,7 +199,7 @@
 		height: 220px;
 		border-radius: 10px;
 		overflow: hidden;
-		background: #141414;
+		background: #ffffff;
 		display: flex;
 		align-items: center;
 		justify-content: center;
@@ -222,7 +239,7 @@
 		align-items: center;
 		gap: 0.5rem;
 		width: 100%;
-		background: var(--color-bg-base);
+		background: var(--color-bg-primary);
 		border: 1px solid var(--color-border-subtle);
 		border-radius: 6px;
 		padding: 0.4rem 0.5rem;

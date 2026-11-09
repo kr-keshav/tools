@@ -186,6 +186,8 @@
 		transition: color 0.15s, background 0.15s;
 	}
 	.seg button:hover { color: var(--color-text-primary); }
+	/* .seg clips to its rounded corners, which would cut an outer ring */
+	.seg button:focus-visible { outline-offset: -2px; }
 	.seg button.on {
 		color: var(--color-bg-surface);
 		background: var(--color-text-primary);
@@ -282,9 +284,14 @@
 		font-weight: 700;
 		touch-action: manipulation;
 		user-select: none;
-		transition: transform 120ms var(--ease-out), filter 0.1s;
+		transition: transform 120ms var(--ease-out), box-shadow 0.1s;
 	}
-	.key:hover { filter: brightness(0.97); }
+	/* A tint works on every key colour in both themes; only with a real pointer, so it can't stick after a tap */
+	@media (hover: hover) {
+		.key:hover { box-shadow: inset 0 0 0 100px color-mix(in srgb, var(--color-text-primary) 7%, transparent); }
+		/* The tint alone would take the quieter key labels below AA */
+		.key.util:hover, .key.fn:hover { color: var(--color-text-primary); }
+	}
 	.key:active { transform: scale(0.93); }
 	.key.wide { grid-column: span 2; }
 
@@ -305,6 +312,30 @@
 		.keys.sci { grid-template-columns: 1fr; }
 		.grid { grid-auto-rows: 48px; }
 		.sci-grid { grid-template-columns: repeat(5, 1fr); grid-auto-rows: 36px; }
+	}
+
+	/* Short phones: Scientific would otherwise leave the tape a single sliver of a row */
+	@media (max-width: 560px) and (max-height: 700px) {
+		.keys.sci .basic-grid { grid-auto-rows: 36px; }
+		.keys.sci .sci-grid { grid-auto-rows: 28px; }
+		.keys.sci, .keys.sci .grid { gap: 0.25rem; }
+	}
+
+	/* 40px touch targets for the bar, without making it taller */
+	@media (pointer: coarse) {
+		.seg { overflow: visible; }
+		.seg button:first-child { border-radius: 5px 0 0 5px; }
+		.seg button:last-child { border-radius: 0 5px 5px 0; }
+		.seg button, .angle, .sym button, .fold-btn { position: relative; }
+		.seg button::after, .angle::after, .sym button::after, .fold-btn::after {
+			content: '';
+			position: absolute;
+			left: 0;
+			right: 0;
+			top: 50%;
+			height: 40px;
+			transform: translateY(-50%);
+		}
 	}
 
 	/* Large screens have room for a real keyboard; keep the pad compact */

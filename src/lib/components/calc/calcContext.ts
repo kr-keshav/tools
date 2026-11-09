@@ -17,6 +17,12 @@ export interface CalcContext {
 	readonly results: Map<string, LineInfo[]>;
 	/** Point the keypad at a line being edited. */
 	beginEdit: (lineId: string, field: CalcField) => void;
+	/** Point the keypad at a field that isn't a line, such as a sub-calc's entry. */
+	target: (field: CalcField) => void;
+	/** Whether the keypad is pointed somewhere other than the main entry. */
+	readonly hasTarget: boolean;
+	/** Type into whichever field the keypad is pointed at. */
+	insert: (text: string) => void;
 	/** Evaluate the tape as if the line being edited already held this input. */
 	previewEdit: (input: string) => void;
 	/** Hand the keypad back to the main entry, if `field` still holds it. */

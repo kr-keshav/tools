@@ -9,10 +9,14 @@
 	let loading = $state(true);
 
 	onMount(async () => {
-		if (!notesUI.activeNoteId) return;
-		versions = await getVersions(notesUI.activeNoteId);
-		selectedVersion = versions[0] ?? null;
-		loading = false;
+		try {
+			if (notesUI.activeNoteId) versions = await getVersions(notesUI.activeNoteId);
+			selectedVersion = versions[0] ?? null;
+		} catch {
+			// Offline: fall through to the empty state rather than loading forever.
+		} finally {
+			loading = false;
+		}
 	});
 
 	async function handleRestore() {
@@ -24,7 +28,17 @@
 	function handleBackdrop(e: MouseEvent) {
 		if (e.target === e.currentTarget) onClose();
 	}
+
+	// Escape closes every other overlay in the app; it has to close this one too.
+	function handleKeydown(e: KeyboardEvent) {
+		if (e.key === 'Escape') {
+			e.preventDefault();
+			onClose();
+		}
+	}
 </script>
+
+<svelte:window onkeydown={handleKeydown} />
 
 <!-- Backdrop -->
 <div
@@ -41,7 +55,7 @@
 		<div class="flex items-center justify-between px-4 py-3 border-b border-border-default">
 			<span class="text-xs font-semibold tracking-widest uppercase text-text-secondary">Version History</span>
 			<button
-				class="p-1 rounded text-text-muted hover:text-text-primary hover:bg-bg-hover transition-colors"
+				class="close-hit p-1 rounded text-text-muted hover:text-text-primary hover:bg-bg-hover transition-colors"
 				onclick={onClose}
 				aria-label="Close"
 			>
@@ -83,12 +97,12 @@
 							{#if selectedVersion.title}
 								<div class="text-sm font-semibold text-text-primary mb-2">{selectedVersion.title}</div>
 							{/if}
-							<pre class="text-xs text-text-secondary whitespace-pre-wrap font-mono leading-5">{selectedVersion.body || '(empty)'}</pre>
+							<pre class="text-xs text-text-secondary whitespace-pre-wrap font-[inherit] leading-5">{selectedVersion.body || '(empty)'}</pre>
 						{/if}
 					</div>
 					<div class="px-3 py-2.5 border-t border-border-default flex justify-end">
 						<button
-							class="px-3 py-1.5 text-xs rounded bg-accent-notes text-bg-primary font-semibold hover:opacity-90 transition-opacity"
+							class="restore-hit px-3 py-1.5 text-xs rounded bg-accent-notes text-on-accent font-semibold hover:opacity-90 transition-opacity"
 							onclick={handleRestore}
 						>
 							Restore this version
@@ -99,3 +113,11 @@
 		{/if}
 	</div>
 </div>
+
+<style>
+	@media (pointer: coarse) {
+		.close-hit, .restore-hit { position: relative; }
+		.close-hit::after { content: ''; position: absolute; inset: -11px; }
+		.restore-hit::after { content: ''; position: absolute; inset: -6px 0; }
+	}
+</style>

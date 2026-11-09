@@ -8,6 +8,7 @@
 		getFolders,
 		getAllTags,
 		createNote,
+		showFolder,
 	} from '$lib/stores/notesState.svelte';
 	import NotesListItem from './NotesListItem.svelte';
 
@@ -15,6 +16,18 @@
 
 	let searchEl = $state<HTMLInputElement | null>(null);
 	let showSort = $state(false);
+	let sortEl = $state<HTMLDivElement | null>(null);
+
+	function onWindowPointerDown(e: PointerEvent) {
+		if (showSort && !sortEl?.contains(e.target as Node)) showSort = false;
+	}
+
+	function onWindowKeydown(e: KeyboardEvent) {
+		if (showSort && e.key === 'Escape') {
+			e.preventDefault();
+			showSort = false;
+		}
+	}
 
 	const visibleNotes = $derived(getVisibleNotes());
 	const liveNotes = $derived(getLiveNotes());
@@ -27,11 +40,13 @@
 	});
 </script>
 
+<svelte:window onpointerdown={onWindowPointerDown} onkeydown={onWindowKeydown} />
+
 <div class="notes-sidebar flex flex-col h-full border-r border-border-default bg-bg-panel min-w-0 overflow-hidden">
 	<!-- Top actions -->
 	<div class="flex items-center gap-1 px-2 pt-2 pb-1.5 shrink-0">
 		<button
-			class="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded text-xs text-accent-notes hover:bg-bg-hover transition-colors font-semibold"
+			class="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded text-xs text-accent-notes hover:bg-bg-hover transition-colors font-semibold focus-visible:-outline-offset-2"
 			onclick={() => createNote()}
 			title="New note (Ctrl+N)"
 		>
@@ -41,7 +56,7 @@
 			New
 		</button>
 		<!-- Sort -->
-		<div class="relative">
+		<div class="relative" bind:this={sortEl}>
 			<button
 				class="p-1.5 rounded text-text-muted hover:text-text-primary hover:bg-bg-hover transition-colors"
 				onclick={() => showSort = !showSort}
@@ -83,7 +98,7 @@
 
 	<!-- Search -->
 	<div class="px-2 pb-2 shrink-0">
-		<div class="flex items-center gap-1.5 px-2 py-1.5 rounded bg-bg-surface border border-border-subtle">
+		<div class="flex items-center gap-1.5 px-2 py-1.5 rounded bg-bg-surface border border-border-subtle focus-within:border-text-faint">
 			<svg width="11" height="11" viewBox="0 0 11 11" fill="none" class="text-text-muted shrink-0">
 				<circle cx="4.5" cy="4.5" r="3.5" stroke="currentColor" stroke-width="1.2"/>
 				<path d="M7.5 7.5l2 2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
@@ -113,7 +128,7 @@
 			class:bg-bg-hover={notesUI.selectedFolder === null && notesUI.selectedTag === null}
 			class:text-text-primary={notesUI.selectedFolder === null && notesUI.selectedTag === null}
 			class:text-text-muted={!(notesUI.selectedFolder === null && notesUI.selectedTag === null)}
-			onclick={() => { notesUI.selectedFolder = null; notesUI.selectedTag = null; }}
+			onclick={() => showFolder(null)}
 		>
 			<svg width="11" height="11" viewBox="0 0 11 11" fill="none">
 				<rect x="1" y="2.5" width="9" height="7" rx="1" stroke="currentColor" stroke-width="1.1"/>
@@ -129,7 +144,7 @@
 				class:bg-bg-hover={notesUI.selectedFolder === folder && notesUI.selectedTag === null}
 				class:text-text-primary={notesUI.selectedFolder === folder && notesUI.selectedTag === null}
 				class:text-text-muted={!(notesUI.selectedFolder === folder && notesUI.selectedTag === null)}
-				onclick={() => { notesUI.selectedFolder = folder; notesUI.selectedTag = null; }}
+				onclick={() => showFolder(folder)}
 			>
 				<svg width="11" height="11" viewBox="0 0 11 11" fill="none">
 					<path d="M1 4h9v4.5a1 1 0 01-1 1H2a1 1 0 01-1-1V4zM1 4V3a1 1 0 011-1h2.5l1 1H9" stroke="currentColor" stroke-width="1.1"/>
@@ -144,7 +159,7 @@
 			class:bg-bg-hover={notesUI.selectedFolder === '__trash__'}
 			class:text-text-primary={notesUI.selectedFolder === '__trash__'}
 			class:text-text-muted={notesUI.selectedFolder !== '__trash__'}
-			onclick={() => { notesUI.selectedFolder = '__trash__'; notesUI.selectedTag = null; }}
+			onclick={() => showFolder('__trash__')}
 		>
 			<svg width="11" height="11" viewBox="0 0 11 11" fill="none">
 				<path d="M1.5 3h8M4 3V1.5h3V3M2.5 3l.5 7h5l.5-7" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/>
@@ -158,16 +173,16 @@
 	{#if allTags.length > 0}
 		<div class="px-2 pb-2 shrink-0">
 			<div class="text-[10px] uppercase tracking-widest text-text-muted px-1 mb-1">Tags</div>
-			<div class="flex flex-wrap gap-1">
+			<div class="flex flex-wrap gap-1 max-h-24 overflow-y-auto">
 				{#each allTags as tag}
 					<button
-						class="px-2 py-0.5 rounded-full text-[10px] transition-colors"
+						class="px-2 py-0.5 rounded-full text-[10px] transition-colors max-w-full truncate focus-visible:-outline-offset-2"
 						class:bg-accent-notes={notesUI.selectedTag === tag}
-						class:text-bg-primary={notesUI.selectedTag === tag}
+						class:text-on-accent={notesUI.selectedTag === tag}
 						class:bg-bg-surface={notesUI.selectedTag !== tag}
 						class:text-text-muted={notesUI.selectedTag !== tag}
 						class:hover:bg-bg-hover={notesUI.selectedTag !== tag}
-						onclick={() => { notesUI.selectedTag = notesUI.selectedTag === tag ? null : tag; }}
+						onclick={() => { const next = notesUI.selectedTag === tag ? null : tag; if (notesUI.selectedFolder === '__trash__') showFolder(null); notesUI.selectedTag = next; }}
 					>#{tag}</button>
 				{/each}
 			</div>

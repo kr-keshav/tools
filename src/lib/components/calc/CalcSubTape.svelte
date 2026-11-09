@@ -1,9 +1,9 @@
 <script lang="ts">
-	import { tick } from 'svelte';
-	import { calcUI, addLine, linesOf } from '$lib/stores/calcState.svelte';
+	import { onDestroy, tick } from 'svelte';
+	import { calcUI, addLine, linesOf, subSheetOf } from '$lib/stores/calcState.svelte';
 	import { formatNumber, prepareInput } from '$lib/calc/engine';
-	import { evaluateTape, indexById, syntaxError, toStored, type LineInfo } from '$lib/calc/tape';
-	import { getCalcContext } from './calcContext';
+	import { evaluateTape, indexById, sheetResult, syntaxError, toStored, type LineInfo } from '$lib/calc/tape';
+	import { getCalcContext, type CalcField } from './calcContext';
 	import CalcLineRow from './CalcLineRow.svelte';
 	import { markFresh } from '$lib/calc/motion';
 
@@ -21,11 +21,25 @@
 	let entryError = $state<string | null>(null);
 	let inputEl = $state<HTMLInputElement | null>(null);
 
+	const entryField: CalcField = {
+		get el() { return inputEl; },
+		get value() { return draft; },
+		set: (next) => { draft = next; entryError = null; },
+		commit,
+	};
+
+	onDestroy(() => ctx.endEdit(entryField));
+
 	const preview = $derived.by(() => {
 		if (!draft.trim()) return null;
 		const input = prepareInput(draft);
 		if (syntaxError(input)) return null;
-		const all = evaluateTape([...lines, { id: '__draft__', input }], calcUI.angle);
+		const all = evaluateTape([...lines, { id: '__draft__', input }], calcUI.angle, {
+			sub: (lineId) => {
+				const child = subSheetOf(lineId);
+				return child ? sheetResult(ctx.results.get(child.id) ?? []) : undefined;
+			},
+		});
 		return all[all.length - 1];
 	});
 
@@ -54,6 +68,8 @@
 
 	/** A result clicked inside this sub-calc belongs in this sub-calc's entry, not the main one. */
 	async function insert(text: string) {
+		// …unless a line is being edited, which is where the click was aimed
+		if (ctx.hasTarget) return ctx.insert(text);
 		const el = inputEl;
 		const focused = el && document.activeElement === el;
 		const start = focused ? (el.selectionStart ?? draft.length) : draft.length;
@@ -77,6 +93,9 @@
 			bind:value={draft}
 			oninput={() => (entryError = null)}
 			onkeydown={handleKey}
+			onfocus={() => ctx.target(entryField)}
+			onblur={() => ctx.endEdit(entryField)}
+			inputmode={calcUI.keypadOpen ? 'none' : 'text'}
 			placeholder={lines.length ? 'Add a line — the last line is the result' : 'First line of the sub-calc, e.g. base = 27000'}
 			spellcheck="false"
 			autocomplete="off"
@@ -121,7 +140,8 @@
 		color: var(--color-text-primary);
 		caret-color: var(--color-accent-calc);
 	}
-	.sub-entry input::placeholder { color: var(--color-text-faint); }
+	.sub-entry input::placeholder { color: var(--color-text-muted); }
+	.sub-entry:focus-within { background: var(--color-bg-active); }
 
 	.preview {
 		flex-shrink: 0;

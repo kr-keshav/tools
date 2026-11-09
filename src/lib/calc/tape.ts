@@ -5,8 +5,10 @@
 
 import {
 	CalcError,
+	clean,
 	evaluateNode,
 	isReservedName,
+	LABEL_RE,
 	parse,
 	splitTrailingTags,
 	TAG_RE,
@@ -34,9 +36,6 @@ export interface LineInfo {
 }
 
 const ASSIGN_RE = /^\s*([a-z_][a-z0-9_]*)\s*=\s*(.*)$/i;
-// Text before the first colon, as long as it holds a letter and no @, # or = — so a
-// future range like `sum(@1:@5)` never looks like a label.
-const LABEL_RE = /^\s*([^:@#=]*[a-z][^:@#=]*?)\s*:\s*(.*)$/i;
 
 export function splitLine(input: string): Pick<LineInfo, 'label' | 'name' | 'expr' | 'tags'> {
 	const { expr: whole, tags } = splitTrailingTags(input);
@@ -48,10 +47,43 @@ export function splitLine(input: string): Pick<LineInfo, 'label' | 'name' | 'exp
 	return { label, expr: body.trim(), tags };
 }
 
+/** Rebuild a line's input from its parts; the inverse of splitLine. */
+export function joinLine({ label, name, expr, tags }: Pick<LineInfo, 'label' | 'name' | 'expr' | 'tags'>): string {
+	const head = (label ? `${label}: ` : '') + (name ? `${name} = ` : '');
+	return head + expr + tags.map((t) => ` #${t}`).join('');
+}
+
+/** Apply `fn` to the expression only, leaving label, name and tags where they are. */
+export function mapExpr(input: string, fn: (expr: string) => string): string {
+	const parts = splitLine(input);
+	return parts.expr ? joinLine({ ...parts, expr: fn(parts.expr) }) : input;
+}
+
+/** ± for an expression: `5` ↔ `-(5)`. Only unwraps when the outer parens are a real pair. */
+export function negateExpr(expr: string): string {
+	const inner = /^-\((.*)\)$/.exec(expr)?.[1];
+	if (inner === undefined) return `-(${expr})`;
+	let depth = 0;
+	for (const ch of inner) {
+		if (ch === '(') depth++;
+		else if (ch === ')' && --depth < 0) return `-(${expr})`;
+	}
+	return inner;
+}
+
+/** Typed `*` and `/` become × and ÷, but a label's text stays exactly as typed. */
+export function typeOperators(raw: string): string {
+	const next = raw.replace(/×\*|\*\*/g, '^').replace(/\*/g, '×').replace(/\//g, '÷');
+	const label = LABEL_RE.exec(next);
+	if (!label) return next;
+	const cut = next.length - label[2].length;
+	return next.slice(0, cut).replace(/×/g, '*').replace(/÷/g, '/') + next.slice(cut);
+}
+
 /** Strip what would stop text reading back as a label; null if nothing usable is left. */
 export function cleanLabel(label: string): string | null {
 	const s = label.replace(/[:@#=]/g, ' ').replace(/\s+/g, ' ').trim();
-	return /[a-z]/i.test(s) ? s : null;
+	return /[\p{L}\p{Extended_Pictographic}\p{Regional_Indicator}]/u.test(s) ? s : null;
 }
 
 /** Set, replace or (with an empty label) remove the `Label:` prefix of a line's input. */
@@ -388,6 +420,18 @@ export interface TagSummary {
 	errors: number;
 }
 
+function readsTag(expr: string, tag: string): boolean {
+	try {
+		let found = false;
+		walk(parse(expr), (node) => {
+			if (node.k === 'tag' && node.v === tag) found = true;
+		});
+		return found;
+	} catch {
+		return false;
+	}
+}
+
 /** Per-tag totals in order of first appearance on the tape. */
 export function summarizeTags(infos: LineInfo[]): TagSummary[] {
 	const byTag = new Map<string, TagSummary>();
@@ -397,10 +441,11 @@ export function summarizeTags(infos: LineInfo[]): TagSummary[] {
 			if (!s) byTag.set(tag, (s = { tag, total: 0, count: 0, errors: 0 }));
 			s.count++;
 			if (info.value === undefined) s.errors++;
-			else s.total += info.value;
+			// `sum(#a) #a` totals the other #a lines, so counting it too would double them
+			else if (!readsTag(info.expr, tag)) s.total += info.value;
 		}
 	}
-	for (const s of byTag.values()) s.total = Number(s.total.toPrecision(12));
+	for (const s of byTag.values()) s.total = clean(s.total);
 	return [...byTag.values()];
 }
 

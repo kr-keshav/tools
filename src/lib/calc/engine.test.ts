@@ -49,6 +49,51 @@ describe('evaluate', () => {
 		['ans*2', 20],
 	])('functions: %s', (input, want) => expect(ev(input)).toBeCloseTo(want, 10));
 
+	it.each([
+		['1,000', 1000],
+		['1,234,567.5', 1234567.5],
+		['1,000+1', 1001],
+		['(1,000)*2', 2000],
+		['-1,000', -1000],
+		['1,000e3', 1000000],
+		['sqrt 1,000,000', 1000],
+		['max(1,2)+1,000', 1002],
+	])('thousands separators: %s', (input, want) => expect(ev(input)).toBe(want));
+
+	it('keeps commas as argument separators inside function calls', () => {
+		expect(ev('max(1,000)')).toBe(1);
+		expect(ev('sum(1,000)')).toBe(1);
+		expect(ev('count(1,000,000)')).toBe(3);
+		expect(ev('max(sum(1,000),2)')).toBe(2);
+		expect(() => ev('max((1,000),2)')).toThrow();
+		expect(() => ev('√(1,000)')).toThrow('sqrt() takes 1 argument');
+	});
+
+	it.each([
+		['1,00'],
+		['1,0000'],
+		['1,000,00'],
+		['1234,567'],
+		['0,123'],
+		['1.5,000'],
+		['1,000.5.2'],
+		[',000'],
+	])('malformed thousands separators stay errors: %s', (input) => expect(() => ev(input)).toThrow());
+
+	it('keeps whole numbers exact past 12 digits', () => {
+		expect(ev('1234567890123')).toBe(1234567890123);
+		expect(ev('1234567890123+1')).toBe(1234567890124);
+		expect(ev('123456789012345')).toBe(123456789012345);
+		expect(ev('0.1+0.2')).toBe(0.3);
+	});
+
+	it('snaps radian trig noise to zero, but not genuinely tiny results', () => {
+		expect(evaluate('sin(pi)', { angle: 'rad' })).toBe(0);
+		expect(evaluate('cos(pi/2)', { angle: 'rad' })).toBe(0);
+		expect(evaluate('tan(pi)', { angle: 'rad' })).toBe(0);
+		expect(evaluate('sin(1e-20)', { angle: 'rad' })).toBe(1e-20);
+	});
+
 	it('radians mode', () => {
 		expect(evaluate('sin(pi/2)', { angle: 'rad' })).toBeCloseTo(1, 10);
 	});
@@ -64,6 +109,10 @@ describe('evaluate', () => {
 		['(-1)^0.5', 'Not a number'],
 		['', 'Empty expression'],
 		['2.5!', 'Factorial needs a whole number ≥ 0'],
+		['1.2.3', 'Malformed number'],
+		['1..2', 'Malformed number'],
+		['1 000', 'Missing operator between numbers'],
+		['2 3', 'Missing operator between numbers'],
 	])('error: %s', (input, msg) => expect(() => ev(input)).toThrow(msg));
 });
 
@@ -72,6 +121,7 @@ describe('input helpers', () => {
 		expect(withChaining('+ 5')).toBe('ans + 5');
 		expect(withChaining('×2')).toBe('ans ×2');
 		expect(withChaining('-5')).toBe('-5');
+		expect(withChaining('Total: +1')).toBe('Total: ans +1');
 	});
 
 	it('closes open parens before label tags', () => {
@@ -87,12 +137,15 @@ describe('input helpers', () => {
 		expect(splitTrailingTags('#food')).toEqual({ expr: '#food', tags: [] });
 		expect(splitTrailingTags('sum(#food) #total')).toEqual({ expr: 'sum(#food)', tags: ['total'] });
 		expect(splitTrailingTags('x = 5 #home')).toEqual({ expr: 'x = 5', tags: ['home'] });
+		expect(splitTrailingTags('5#food')).toEqual({ expr: '5', tags: ['food'] });
 	});
 
 	it('formats numbers', () => {
 		expect(formatNumber(1234567.891)).toBe('1,234,567.891');
 		expect(formatNumber(1e20)).toBe('1e+20');
 		expect(formatNumber(1.5e-12)).toBe('1.5e-12');
+		expect(formatNumber(1.23456789e-9)).toBe('1.23456789e-9');
+		expect(formatNumber(1234567890123)).toBe('1,234,567,890,123');
 		expect(formatNumber(-0.3)).toBe('-0.3');
 	});
 });

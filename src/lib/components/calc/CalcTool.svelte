@@ -7,6 +7,7 @@
 		addLine,
 		clearSheet,
 		linesOf,
+		subSheetOf,
 		undoDelete,
 		saveCalcPrefs,
 	} from '$lib/stores/calcState.svelte';
@@ -15,12 +16,17 @@
 		evaluateSheets,
 		evaluateTape,
 		indexById,
+		mapExpr,
+		negateExpr,
 		setLabel,
+		sheetResult,
+		splitLine,
 		summarizeTags,
 		syntaxError,
 		tagTone,
 		toDisplay,
 		toStored,
+		typeOperators,
 	} from '$lib/calc/tape';
 	import CalcLineRow from './CalcLineRow.svelte';
 	import CalcKeypad, { type KeyAction } from './CalcKeypad.svelte';
@@ -40,6 +46,8 @@
 	let caret = $state(0);
 	/** Position while stepping back through earlier lines with ↑ / ↓. */
 	let historyIdx = $state<number | null>(null);
+	/** What was being typed before ↑, restored by ↓ past the newest line. */
+	let historyDraft = '';
 	let confirmClear = $state(false);
 	let confirmTimer: ReturnType<typeof setTimeout> | null = null;
 	/** The line's field while one is being edited; the keypad types there instead of the entry. */
@@ -69,6 +77,11 @@
 			editField = field;
 			liveEdit = { id, input: calcLines.find((l) => l.id === id)?.input ?? '' };
 		},
+		target(field) {
+			editField = field;
+		},
+		get hasTarget() { return editField !== null; },
+		insert: (text) => insert(text),
 		previewEdit(input) {
 			if (liveEdit) liveEdit = { id: liveEdit.id, input };
 		},
@@ -103,7 +116,12 @@
 		if (!draft.trim()) return null;
 		const input = prepareInput(draft);
 		if (syntaxError(input)) return null;
-		const all = evaluateTape([...sheetLines, { id: '__draft__', input }], calcUI.angle);
+		const all = evaluateTape([...sheetLines, { id: '__draft__', input }], calcUI.angle, {
+			sub: (lineId) => {
+				const child = subSheetOf(lineId);
+				return child ? sheetResult(allResults.get(child.id) ?? []) : undefined;
+			},
+		});
 		return all[all.length - 1];
 	});
 
@@ -165,6 +183,8 @@
 			return;
 		}
 		markFresh();
+		// A line the active filter would hide must not vanish as it's added
+		if (calcUI.activeTag && !splitLine(input).tags.includes(calcUI.activeTag)) calcUI.activeTag = null;
 		addLine(toStored(labelDraft.trim() ? setLabel(input, labelDraft) : input, sheetLines));
 		setDraft('');
 		labelDraft = '';
@@ -175,7 +195,7 @@
 	function handleInput(e: Event) {
 		const el = e.currentTarget as HTMLInputElement;
 		const raw = el.value;
-		const next = raw.replace(/×\*|\*\*/g, '^').replace(/\*/g, '×').replace(/\//g, '÷');
+		const next = typeOperators(raw);
 		if (next !== raw) {
 			const pos = (el.selectionStart ?? raw.length) - (raw.length - next.length);
 			el.value = next;
@@ -204,10 +224,11 @@
 			else inputEl?.blur();
 		} else if (e.key === 'ArrowUp' && sheetLines.length > 0) {
 			e.preventDefault();
+			if (historyIdx === null) historyDraft = draft;
 			recall(Math.max(0, (historyIdx ?? sheetLines.length) - 1));
 		} else if (e.key === 'ArrowDown' && historyIdx !== null) {
 			e.preventDefault();
-			if (historyIdx + 1 >= sheetLines.length) setDraft('');
+			if (historyIdx + 1 >= sheetLines.length) setDraft(historyDraft);
 			else recall(historyIdx + 1);
 		}
 	}
@@ -255,14 +276,12 @@
 			case 'back':   backspace(); break;
 			case 'equals': field.commit(); break;
 			case 'sign': {
-				const wrapped = /^-\((.*)\)$/.exec(s);
-				if (wrapped) field.set(wrapped[1]);
-				else if (s) field.set(`-(${s})`);
+				if (s) field.set(mapExpr(s, negateExpr));
 				else if (hasPrev) field.set('-ans');
 				break;
 			}
 			case 'recip':
-				if (s) field.set(`1÷(${s})`);
+				if (s) field.set(mapExpr(s, (expr) => `1÷(${expr})`));
 				else if (hasPrev) field.set('1÷ans');
 				break;
 		}
@@ -297,11 +316,6 @@
 		calcUI.activeTag = calcUI.activeTag === tag ? null : tag;
 	}
 
-	function toggleTheme() {
-		calcUI.theme = calcUI.theme === 'dark' ? 'light' : 'dark';
-		saveCalcPrefs();
-	}
-
 	function handleClear() {
 		if (!confirmClear) {
 			confirmClear = true;
@@ -327,18 +341,6 @@
 					{confirmClear ? 'Click again to clear' : 'Clear'}
 				</button>
 			{/if}
-			<button
-				class="theme-btn"
-				onclick={toggleTheme}
-				aria-label={calcUI.theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-				title={calcUI.theme === 'dark' ? 'Light mode' : 'Dark mode'}
-			>
-				{#if calcUI.theme === 'dark'}
-					<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="2.6" stroke="currentColor" stroke-width="1.2"/><path d="M7 1v1.4M7 11.6V13M1 7h1.4M11.6 7H13M2.8 2.8l1 1M10.2 10.2l1 1M2.8 11.2l1-1M10.2 3.8l1-1" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
-				{:else}
-					<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M11.8 8.6A5 5 0 0 1 5.4 2.2a5 5 0 1 0 6.4 6.4z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>
-				{/if}
-			</button>
 		</div>
 
 		{#if pinned.length > 0}
@@ -527,20 +529,6 @@
 	}
 	.toolbar-gap { flex: 1; }
 	.count { font-size: 0.65rem; color: var(--color-text-muted); flex-shrink: 0; }
-	.theme-btn {
-		display: flex;
-		flex-shrink: 0;
-		align-items: center;
-		justify-content: center;
-		width: 26px;
-		height: 26px;
-		background: none;
-		border: none;
-		border-radius: 7px;
-		color: var(--color-text-muted);
-		transition: color 0.1s, background 0.1s;
-	}
-	.theme-btn:hover { color: var(--color-text-primary); background: var(--color-bg-hover); }
 
 	.clear-btn {
 		flex-shrink: 0;
@@ -627,13 +615,16 @@
 		color: var(--color-text-secondary);
 		transition: color 0.2s, border-color 0.2s, background 0.2s;
 	}
-	.chip:hover { color: var(--color-text-primary); background: var(--color-bg-hover); }
+	.chip:focus-visible, .pin:focus-visible, .completion:focus-visible { outline-offset: -2px; }
 	.chip.on {
 		color: var(--color-bg-surface);
 		border-color: var(--color-text-primary);
 		background: var(--color-text-primary);
 	}
-	.chip.on:hover { color: var(--color-bg-surface); background: var(--color-text-primary); }
+	@media (hover: hover) {
+		.chip:not(.on):hover { color: var(--color-text-primary); background: var(--color-bg-hover); }
+		.chip.on:hover { background: color-mix(in srgb, var(--color-text-primary) 82%, var(--color-bg-surface)); }
+	}
 	.chip.tag .chip-name { color: var(--tag-fg); }
 	.chip.tag.on .chip-name, .chip.on .chip-total { color: var(--color-bg-surface); }
 	.chip-total { font-variant-numeric: tabular-nums; color: var(--color-text-primary); }
@@ -768,6 +759,7 @@
 		background: var(--color-bg-panel);
 		flex-shrink: 0;
 	}
+	.entry:focus-within { background: var(--color-bg-active); }
 	.prompt { color: var(--color-accent-calc); font-size: 1.1rem; line-height: 1; }
 
 	/* Doubled class so it outranks the `.entry input` rule for the expression field */
@@ -784,7 +776,7 @@
 		outline: none;
 		transition: border-color 0.15s;
 	}
-	.entry .entry-label::placeholder { color: var(--color-text-faint); }
+	.entry .entry-label::placeholder { color: var(--color-text-muted); }
 	.entry .entry-label:focus { border-color: color-mix(in srgb, var(--color-accent-calc) 55%, transparent); }
 	@media (max-width: 560px) {
 		.entry .entry-label { flex-basis: 5.5rem; width: 5.5rem; }
@@ -802,7 +794,9 @@
 		color: var(--color-text-primary);
 		caret-color: var(--color-accent-calc);
 	}
-	.entry input::placeholder { color: var(--color-text-faint); }
+	.entry input::placeholder { color: var(--color-text-muted); }
+	/* The field's only focus cue besides the row tint: an underline, never an outer box */
+	.entry input:focus { box-shadow: inset 0 -2px 0 var(--color-accent-calc); }
 
 	.preview {
 		flex-shrink: 0;
@@ -814,8 +808,30 @@
 		color: var(--color-text-muted);
 		font-variant-numeric: tabular-nums;
 	}
-	.preview.soft { font-size: 0.68rem; color: var(--color-text-faint); }
+	.preview.soft { font-size: 0.68rem; color: var(--color-text-muted); }
 	.preview.err { font-size: 0.7rem; color: var(--color-danger); }
+
+	/* The smallest phones: a long answer must not squeeze the field being typed in */
+	@media (max-width: 380px) {
+		.entry .entry-label { flex-basis: 4rem; width: 4rem; }
+		.preview { max-width: 30%; }
+	}
+
+	/* 40px touch targets, without moving anything */
+	@media (pointer: coarse) {
+		.clear-btn, .filter-clear, .toast button { position: relative; }
+		.clear-btn::after, .filter-clear::after, .toast button::after, .chip::after {
+			content: '';
+			position: absolute;
+			left: 0;
+			right: 0;
+			top: 50%;
+			height: 40px;
+			transform: translateY(-50%);
+		}
+		.chip { position: relative; }
+		.entry input:not(.entry-label) { padding-block: 9px; margin-block: -9px; }
+	}
 
 	/* The keypad is typing into a line on the tape, not the entry */
 	.keypad-col.editing :global(.keypad) {

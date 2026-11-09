@@ -58,9 +58,15 @@ const SYMBOLS: Record<string, string> = { '×': '*', '·': '*', '÷': '/', '−'
 
 export const TAG_RE = /#[a-z0-9_][a-z0-9_-]*/i;
 
+// Text before the first colon, as long as it holds a letter or emoji in any script and no
+// @, # or = — so a future range like `sum(@1:@5)` never looks like a label.
+export const LABEL_RE = /^\s*([^:@#=]*[\p{L}\p{Extended_Pictographic}\p{Regional_Indicator}][^:@#=]*?)\s*:\s*(.*)$/iu;
+
 function tokenize(src: string): Token[] {
 	const out: Token[] = [];
 	let i = 0;
+	// One entry per open paren: true if it opened a function call, where a comma separates arguments
+	const parens: boolean[] = [];
 	while (i < src.length) {
 		const ch = src[i];
 		if (/\s/.test(ch)) { i++; continue; }
@@ -91,9 +97,13 @@ function tokenize(src: string): Token[] {
 		}
 
 		// Exponent only when digits follow, so `2e` stays "2 times e"
-		const num = /^(\d+\.?\d*|\.\d+)(e[+-]?\d+)?/i.exec(rest);
+		// `1,000` is a thousands separator, except inside f(...) where `max(1,000)` is two arguments
+		const grouped = parens.includes(true) ? null : /^[1-9]\d{0,2}(?:,\d{3})+(?!\d)(?:\.\d*)?(?:e[+-]?\d+)?/i.exec(rest);
+		const num = grouped ?? /^(\d+\.?\d*|\.\d+)(e[+-]?\d+)?/i.exec(rest);
 		if (num) {
-			out.push({ t: 'num', v: parseFloat(num[0]) });
+			// `1.2.3` and `1..2` would otherwise read as implicit multiplication
+			if (src[i + num[0].length] === '.') throw new CalcError('Malformed number');
+			out.push({ t: 'num', v: parseFloat(num[0].replace(/,/g, '')) });
 			i += num[0].length;
 			continue;
 		}
@@ -106,7 +116,17 @@ function tokenize(src: string): Token[] {
 		}
 
 		if (src.startsWith('**', i)) { out.push({ t: 'op', v: '^' }); i += 2; continue; }
-		if ('+-*/^%!(),'.includes(ch)) { out.push({ t: 'op', v: ch }); i++; continue; }
+		if ('+-*/^%!(),'.includes(ch)) {
+			if (ch === '(') {
+				const prev = out[out.length - 1];
+				parens.push(prev?.t === 'id' && prev.v in FUNCTIONS);
+			} else if (ch === ')') {
+				parens.pop();
+			}
+			out.push({ t: 'op', v: ch });
+			i++;
+			continue;
+		}
 
 		throw new CalcError(`Unexpected "${ch}"`);
 	}
@@ -172,6 +192,10 @@ class Parser {
 				const op = (this.tokens[this.pos++] as { v: string }).v;
 				node = { k: 'bin', op, a: node, b: this.unary() };
 			} else if (this.startsOperand()) {
+				// `2pi` and `3(4)` are fine, but `1 000` is a mistyped number, not 1 × 0
+				if (this.peek()?.t === 'num' && this.tokens[this.pos - 1]?.t === 'num') {
+					throw new CalcError('Missing operator between numbers');
+				}
 				node = { k: 'bin', op: '*', a: node, b: this.unary() };
 			} else {
 				return node;
@@ -276,7 +300,9 @@ function trig(name: string, x: number, angle: AngleMode): number {
 		if (name === 'tan' && m % 180 === 90) throw new CalcError('tan is undefined here');
 		x = (x * Math.PI) / 180;
 	}
-	return name === 'sin' ? Math.sin(x) : name === 'cos' ? Math.cos(x) : Math.tan(x);
+	const r = name === 'sin' ? Math.sin(x) : name === 'cos' ? Math.cos(x) : Math.tan(x);
+	// Same in radians: sin(π) is 0, not 1.2e-16. Tiny inputs have genuinely tiny answers.
+	return Math.abs(x) >= 1 && Math.abs(r) < 1e-14 ? 0 : r;
 }
 
 function evalNode(node: Node, ctx: EvalCtx): number {
@@ -374,9 +400,9 @@ function evalNode(node: Node, ctx: EvalCtx): number {
 	}
 }
 
-/** Trim binary float noise: 0.1 + 0.2 → 0.3, 1.1 * 3 → 3.3. */
-function clean(x: number): number {
-	return x === 0 ? 0 : Number(x.toPrecision(12));
+/** Trim binary float noise: 0.1 + 0.2 → 0.3, 1.1 * 3 → 3.3. Whole numbers are already exact. */
+export function clean(x: number): number {
+	return x === 0 || Number.isSafeInteger(x) ? x : Number(x.toPrecision(15));
 }
 
 export function evaluateNode(node: Node, ctx: EvalCtx): number {
@@ -419,7 +445,8 @@ export function walk(node: Node, visit: (n: Node) => void) {
  */
 export function withChaining(input: string): string {
 	const s = input.trim();
-	return /^[+*/^×÷]/.test(s) ? `ans ${s}` : s;
+	const body = LABEL_RE.exec(s)?.[2] ?? s;
+	return /^[+*/^×÷]/.test(body) ? `${s.slice(0, s.length - body.length)}ans ${body}` : s;
 }
 
 /**
@@ -430,7 +457,8 @@ export function splitTrailingTags(text: string): { expr: string; tags: string[] 
 	let expr = text.trimEnd();
 	const tags: string[] = [];
 	for (;;) {
-		const m = new RegExp(`\\s(${TAG_RE.source})$`, 'i').exec(expr);
+		// `5#food` tags the line too, rather than multiplying 5 by the #food total
+		const m = new RegExp(`(?:\\s|(?<=[\\d)]))(${TAG_RE.source})$`, 'i').exec(expr);
 		if (!m) break;
 		const before = expr.slice(0, m.index).trimEnd();
 		if (!/[\w)%!}.π]$/.test(before)) break;
@@ -461,7 +489,7 @@ export function prepareInput(raw: string): string {
 
 export function formatNumber(x: number): string {
 	const abs = Math.abs(x);
-	if (abs !== 0 && (abs >= 1e15 || abs < 1e-9)) {
+	if (abs !== 0 && (abs >= 1e15 || abs < 1e-6)) {
 		return x.toExponential().replace(/\.?0+e/, 'e');
 	}
 	return x.toLocaleString('en-US', { maximumFractionDigits: 10 });

@@ -107,6 +107,7 @@
 		height: 2px;
 		border-radius: 1px;
 		background: var(--color-accent-calc);
+		pointer-events: none;
 	}
 
 	.tab-btn {
@@ -135,7 +136,7 @@
 		border: none;
 		border-radius: 4px;
 		font-size: 0.75rem;
-		color: var(--color-text-faint);
+		color: var(--color-text-muted);
 		opacity: 0;
 		transition: opacity 0.1s, color 0.1s;
 	}
@@ -143,6 +144,17 @@
 	.tab-del:hover { color: var(--color-danger); }
 	@media (hover: none) {
 		.tab.on .tab-del { opacity: 1; }
+	}
+
+	/* The strip scrolls, which would clip an outer ring */
+	.tab-btn:focus-visible, .tab-del:focus-visible, .tab-add:focus-visible { outline-offset: -2px; }
+
+	/* 40px touch targets in the 36px toolbar: the strip scrolls and would clip anything taller */
+	@media (pointer: coarse) {
+		.tabs { position: relative; z-index: 1; height: 40px; margin-block: -2px; }
+		.tab.on::after { bottom: 2px; }
+		.tab-del { position: relative; }
+		.tab-del::after { content: ''; position: absolute; left: 0; right: 0; top: 50%; height: 40px; transform: translateY(-50%); }
 	}
 
 	.tab input {
@@ -165,7 +177,7 @@
 		padding: 0 0.625rem;
 		font-size: 0.95rem;
 		line-height: 1;
-		color: var(--color-text-faint);
+		color: var(--color-text-muted);
 		transition: color 0.1s;
 	}
 	.tab-add:hover { color: var(--color-text-secondary); }

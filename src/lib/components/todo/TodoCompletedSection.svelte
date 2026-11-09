@@ -11,15 +11,16 @@
 {#if tasks.length > 0}
 	<div class="mt-2 border-t border-border-subtle pt-3">
 		<button
-			class="flex items-center gap-2 w-full py-1 text-left group"
+			style="--hit:-12px 0 -4px"
+			class="hit flex items-center gap-2 w-full py-1 text-left group focus-visible:-outline-offset-2"
 			onclick={() => (expanded = !expanded)}
 			aria-expanded={expanded}
 		>
-			<span class="text-[0.62rem] uppercase tracking-widest font-mono text-text-muted/50 transition-colors group-hover:text-text-muted">
+			<span class="text-[0.62rem] uppercase tracking-widest text-text-muted transition-colors group-hover:text-text-muted">
 				Completed
 			</span>
-			<span class="text-[0.62rem] text-text-muted/40">{tasks.length}</span>
-			<span class="ml-auto text-[0.55rem] text-text-muted/30 group-hover:text-text-muted/60 transition-colors">
+			<span class="text-[0.62rem] text-text-muted">{tasks.length}</span>
+			<span class="ml-auto text-[0.55rem] text-text-muted group-hover:text-text-secondary transition-colors">
 				{expanded ? '▾' : '▸'}
 			</span>
 		</button>
@@ -33,26 +34,27 @@
 						<input
 							type="checkbox"
 							class="w-3.5 h-3.5 min-w-[14px] rounded-sm cursor-pointer"
-							style="accent-color: #b5866b"
+							style="accent-color: var(--color-accent)"
 							checked={true}
 							onchange={() => toggleTask(task.id)}
 							aria-label="Restore task"
 						/>
 
 						<!-- Title -->
-						<span class="flex-1 text-[0.78rem] font-mono text-text-muted line-through truncate">
+						<span class="flex-1 text-[0.78rem] text-text-muted line-through truncate">
 							{task.title}
 						</span>
 
 						<!-- Due date if any -->
 						{#if due}
-							<span class="text-[0.65rem] text-text-muted/50 shrink-0">{due.label}</span>
+							<span class="text-[0.65rem] text-text-muted shrink-0">{due.label}</span>
 						{/if}
 
 						<!-- Delete permanently -->
 						<button
-							onclick={() => deleteTask(task.id, false)}
-							class="text-[0.65rem] text-text-muted/20 hover:text-[#c77171] opacity-0 group-hover/item:opacity-100 transition-all shrink-0"
+							onclick={() => deleteTask(task.id)}
+							style="--hit:-8px -8px"
+							class="hit text-[0.65rem] text-text-muted hover:text-danger opacity-0 group-hover/item:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 focus-visible:-outline-offset-2 transition-all shrink-0"
 							aria-label="Delete permanently"
 						>×</button>
 					</li>
@@ -61,3 +63,11 @@
 		{/if}
 	</div>
 {/if}
+
+<style>
+	/* Grow the tap area on touch screens without changing how the control looks. */
+	@media (pointer: coarse) {
+		.hit { position: relative; }
+		.hit::after { content: ''; position: absolute; inset: var(--hit); }
+	}
+</style>

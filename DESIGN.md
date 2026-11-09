@@ -2,7 +2,7 @@
 
 The visual and motion rules for every WorkKit product. Use this file when building or restyling any tool so they all feel like one product.
 
-**Status:** live in Calc, in light and Graphite dark, through the `.ripple` scope in `src/app.css`. Other tools still use the older dark theme. To move one over, add `ripple` and `data-theme` to its outer element.
+**Status:** live across WorkKit, in light and Graphite dark. `app.html` puts `.ripple` and `data-theme` on `<html>`, the tokens live in `src/app.css`, and the switch is in the shared header.
 **Reference:** the Ripple tab of the [live prototype](https://claude.ai/artifact/4pv2w4xbSFsoNR2em7skQ1) (private, so it must be shared before others can open it).
 
 ## Principles
@@ -33,7 +33,7 @@ These keep the variable names already used in `src/app.css`, so a tool can adopt
   --color-text-primary: #171a2b;
   --color-text-secondary: #5f6680;
   --color-text-muted: #5f6680;
-  --color-text-faint: #7a809a;   /* placeholders and line numbers only */
+  --color-text-faint: #6b7189;   /* placeholders and line numbers */
 
   /* Brand */
   --color-accent: #3d4fe0;       /* new: primary colour everywhere */
@@ -73,7 +73,7 @@ Same layout, type and motion as light. Only these values change. The neutrals ca
   --color-text-primary: #ececee;
   --color-text-secondary: #a3a5ac;
   --color-text-muted: #a3a5ac;
-  --color-text-faint: #7f828a;
+  --color-text-faint: #8d9098;
 
   --color-accent: #7f8cff;
   --color-accent-soft: #2a2c45;
@@ -98,7 +98,7 @@ Assign each tag a pair, and use the same pair everywhere that tag appears. In da
 
 ### Tool accents
 
-Cobalt is the primary colour in every tool. The current tool accents (`#6c8ebf`, `#82b366`, `#b5866b`, `#9673a6`) were chosen for a dark background and are too pale for text on white. Where a tool needs its own identity, such as an icon or tab, reuse the text colour of a pair above. The pairing of tool to colour is still to be decided.
+Cobalt is the primary colour in every tool. The current tool accents (`#6c8ebf`, `#82b366`, `#b5866b`, `#9673a6`) were chosen for a dark background and are too pale for text on white. Where a tool needs its own identity, such as an icon or tab, reuse the text colour of a pair above. Today the header's tool dots use Timer blue, Notes green and Todo amber, the closest pairs to each tool's earlier colour. Timer phases and task priorities use the same palette, and everything else in a tool is cobalt.
 
 ## Typography
 
@@ -144,7 +144,8 @@ The sizes above are from the prototype's laptop screen.
 
 | Moment | Animation | Duration | Easing |
 |---|---|---|---|
-| Press a key or button | Scale to 0.93 | 120ms | out |
+| Press a key | Scale to 0.93 | 120ms | out |
+| Press any other button | Scale to 0.96 | 120ms | out |
 | Ripple on press | Circle grows from the pointer, 28% opacity fading to 0 | 500ms | out |
 | Value changes | Only the changed digits slide up 70% and fade in, 18ms apart | 460ms | spring |
 | Dependent rows update | Each row's tag colour at 26% fades out, 70ms apart | 800ms | out |
@@ -162,7 +163,7 @@ The sizes above are from the prototype's laptop screen.
 
 ## Accessibility
 
-- Don't use `--color-text-faint` for anything people must read: it is below 4.5:1 on white.
+- `--color-text-faint` passes 4.5:1 on white and on dark surfaces, but not on the grey page. Keep it off the page background.
 - Don't rely on colour alone. Tags also show their name.
 - Every control needs a visible focus state: a 2px accent outline with 2px offset.
 - Touch targets on phones should be at least 40px tall.
@@ -170,4 +171,4 @@ The sizes above are from the prototype's laptop screen.
 
 ## Not defined yet
 
-- Final colour for each tool, and how tags beyond five get their colours.
+- How tags beyond five get their colours.

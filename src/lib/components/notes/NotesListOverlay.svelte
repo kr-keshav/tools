@@ -7,6 +7,7 @@
 		getFolders,
 		getAllTags,
 		createNote,
+		showFolder,
 	} from '$lib/stores/notesState.svelte';
 	import NotesListItem from './NotesListItem.svelte';
 
@@ -25,7 +26,7 @@
 		<div class="flex items-center justify-between px-3 py-2.5 border-b border-border-subtle shrink-0">
 			<span class="text-[10px] uppercase tracking-widest text-text-muted font-semibold">Notes</span>
 			<button
-				class="p-1 rounded text-text-muted hover:text-text-primary hover:bg-bg-hover transition-colors"
+				class="close-hit p-1 rounded text-text-muted hover:text-text-primary hover:bg-bg-hover transition-colors"
 				onclick={onClose}
 				aria-label="Close"
 			>
@@ -37,7 +38,7 @@
 
 		<div class="px-2 pt-2 shrink-0">
 			<button
-				class="w-full flex items-center justify-center gap-1.5 py-1.5 rounded text-xs text-accent-notes hover:bg-bg-hover transition-colors font-semibold border border-border-subtle"
+				class="new-hit w-full flex items-center justify-center gap-1.5 py-1.5 rounded text-xs text-accent-notes hover:bg-bg-hover transition-colors font-semibold border border-border-subtle"
 				onclick={() => { createNote(); onClose(); }}
 			>
 				<svg width="11" height="11" viewBox="0 0 11 11" fill="none">
@@ -48,7 +49,7 @@
 		</div>
 
 		<div class="px-2 pt-2 pb-1.5 shrink-0">
-			<div class="flex items-center gap-1.5 px-2 py-1.5 rounded bg-bg-surface border border-border-subtle">
+			<div class="flex items-center gap-1.5 px-2 py-1.5 rounded bg-bg-surface border border-border-subtle focus-within:border-text-faint">
 				<svg width="10" height="10" viewBox="0 0 10 10" fill="none" class="text-text-muted shrink-0">
 					<circle cx="4" cy="4" r="3" stroke="currentColor" stroke-width="1.2"/>
 					<path d="M7 7l2 2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
@@ -58,7 +59,7 @@
 					oninput={(e) => { notesUI.searchQuery = (e.currentTarget as HTMLInputElement).value; }}
 					type="text"
 					placeholder="Search..."
-					class="flex-1 bg-transparent text-xs text-text-primary placeholder-text-muted outline-none min-w-0"
+					class="search-hit flex-1 bg-transparent text-xs text-text-primary placeholder-text-muted outline-none min-w-0"
 				/>
 			</div>
 		</div>
@@ -69,7 +70,7 @@
 				class:bg-bg-hover={notesUI.selectedFolder === null && notesUI.selectedTag === null}
 				class:text-text-primary={notesUI.selectedFolder === null && notesUI.selectedTag === null}
 				class:text-text-muted={!(notesUI.selectedFolder === null && notesUI.selectedTag === null)}
-				onclick={() => { notesUI.selectedFolder = null; notesUI.selectedTag = null; }}
+				onclick={() => showFolder(null)}
 			>All Notes <span class="ml-auto text-[10px] opacity-60">{liveNotes.length}</span></button>
 
 			{#each folders as folder}
@@ -78,7 +79,7 @@
 					class:bg-bg-hover={notesUI.selectedFolder === folder}
 					class:text-text-primary={notesUI.selectedFolder === folder}
 					class:text-text-muted={notesUI.selectedFolder !== folder}
-					onclick={() => { notesUI.selectedFolder = folder; notesUI.selectedTag = null; }}
+					onclick={() => showFolder(folder)}
 				>{folder} <span class="ml-auto text-[10px] opacity-60">{liveNotes.filter(n => n.folder === folder).length}</span></button>
 			{/each}
 
@@ -87,20 +88,20 @@
 				class:bg-bg-hover={notesUI.selectedFolder === '__trash__'}
 				class:text-text-primary={notesUI.selectedFolder === '__trash__'}
 				class:text-text-muted={notesUI.selectedFolder !== '__trash__'}
-				onclick={() => { notesUI.selectedFolder = '__trash__'; notesUI.selectedTag = null; }}
+				onclick={() => showFolder('__trash__')}
 			>Trash <span class="ml-auto text-[10px] opacity-60">{trashedNotes.length}</span></button>
 		</div>
 
 		{#if allTags.length > 0}
-			<div class="px-2 py-1.5 shrink-0 flex flex-wrap gap-1">
+			<div class="px-2 py-1.5 shrink-0 flex flex-wrap gap-1 max-h-24 overflow-y-auto">
 				{#each allTags as tag}
 					<button
-						class="px-2 py-0.5 rounded-full text-[10px] transition-colors"
+						class="px-2 py-0.5 rounded-full text-[10px] transition-colors max-w-full truncate focus-visible:-outline-offset-2"
 						class:bg-accent-notes={notesUI.selectedTag === tag}
-						class:text-bg-primary={notesUI.selectedTag === tag}
+						class:text-on-accent={notesUI.selectedTag === tag}
 						class:bg-bg-surface={notesUI.selectedTag !== tag}
 						class:text-text-muted={notesUI.selectedTag !== tag}
-						onclick={() => { notesUI.selectedTag = notesUI.selectedTag === tag ? null : tag; }}
+						onclick={() => { const next = notesUI.selectedTag === tag ? null : tag; if (notesUI.selectedFolder === '__trash__') showFolder(null); notesUI.selectedTag = next; }}
 					>#{tag}</button>
 				{/each}
 			</div>
@@ -130,3 +131,13 @@
 		role="presentation"
 	></div>
 </div>
+
+<style>
+	/* Phones: 40px targets without moving anything (see DESIGN.md). */
+	@media (pointer: coarse) {
+		.close-hit, .new-hit { position: relative; }
+		.close-hit::after { content: ''; position: absolute; inset: -10px; }
+		.new-hit::after { content: ''; position: absolute; inset: -6px 0; }
+		.search-hit { padding-block: 12px; margin-block: -12px; }
+	}
+</style>

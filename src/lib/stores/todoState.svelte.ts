@@ -2,7 +2,7 @@ import { browser } from '$app/environment';
 import { firestore } from '$lib/firebase';
 import {
 	collection, doc, setDoc, updateDoc, deleteDoc, getDocs,
-	onSnapshot, query, orderBy, writeBatch,
+	onSnapshot, query, orderBy, writeBatch, deleteField,
 	type Unsubscribe,
 } from 'firebase/firestore';
 import type { Task, Subtask, Tab } from '$lib/db/todo.db';
@@ -21,6 +21,7 @@ export let todoUI = $state<{
 	focusedTaskId:  string | null;
 	expandedTaskId: string | null;
 	draggedTaskId:  string | null;
+	touchDropTarget: { id: string; position: 'before' | 'after' } | null;
 	activeTabId:    string;
 	undoItem:       { type: 'complete' | 'delete'; task: Task } | null;
 }>({
@@ -29,6 +30,7 @@ export let todoUI = $state<{
 	focusedTaskId:  null,
 	expandedTaskId: null,
 	draggedTaskId:  null,
+	touchDropTarget: null,
 	activeTabId:    'default',
 	undoItem:       null,
 });
@@ -124,12 +126,13 @@ export function unloadTasks() {
 
 // ── Tab CRUD ──────────────────────────────────────────────────────────────
 
-export async function addTab(): Promise<Tab> {
+// Synchronous so the caller can start renaming without waiting on the network.
+export function addTab(): Tab {
 	const maxOrder = tabs.length > 0 ? Math.max(...tabs.map(t => t.order)) : -1;
 	const tab: Tab = { id: crypto.randomUUID(), name: 'New tab', order: maxOrder + 1 };
 	tabs.push(tab);
 	todoUI.activeTabId = tab.id;
-	if (_userId) await setDoc(tabDoc(_userId, tab.id), tab);
+	if (_userId) void setDoc(tabDoc(_userId, tab.id), tab);
 	return tab;
 }
 
@@ -163,7 +166,12 @@ export async function deleteTab(id: string) {
 
 // ── Task CRUD ─────────────────────────────────────────────────────────────
 
-export async function addTask(title: string, dueDate?: string): Promise<Task> {
+export async function addTask(
+	title: string,
+	dueDate?: string,
+	tags: string[] = [],
+	priority: 0 | 1 | 2 | 3 = 0,
+): Promise<Task> {
 	const tabTasks = tasks.filter(t => t.tabId === todoUI.activeTabId);
 	const maxOrder = tabTasks.length > 0 ? Math.max(...tabTasks.map(t => t.order)) : -1;
 	const task: Task = {
@@ -171,9 +179,9 @@ export async function addTask(title: string, dueDate?: string): Promise<Task> {
 		title,
 		notes:     '',
 		completed: false,
-		priority:  0,
+		priority,
 		dueDate,
-		tags:      [],
+		tags,
 		subtasks:  [],
 		createdAt: Date.now(),
 		updatedAt: Date.now(),
@@ -190,7 +198,7 @@ export async function updateTask(id: string, patch: Partial<Omit<Task, 'id' | 'c
 	if (!task) return;
 	const updated = { ...patch, updatedAt: Date.now() };
 	Object.assign(task, updated);
-	if (_userId) await updateDoc(taskDoc(_userId, id), stripUndefined(updated));
+	if (_userId) await updateDoc(taskDoc(_userId, id), clearUndefined(updated));
 }
 
 export async function deleteTask(id: string, addToUndo = true) {
@@ -211,7 +219,7 @@ export async function toggleTask(id: string) {
 	task.completedAt = task.completed ? Date.now() : undefined;
 	task.updatedAt   = Date.now();
 	if (task.completed && todoUI.expandedTaskId === id) todoUI.expandedTaskId = null;
-	if (_userId) await updateDoc(taskDoc(_userId, id), stripUndefined({
+	if (_userId) await updateDoc(taskDoc(_userId, id), clearUndefined({
 		completed: task.completed, completedAt: task.completedAt, updatedAt: task.updatedAt,
 	}));
 }
@@ -219,7 +227,9 @@ export async function toggleTask(id: string) {
 export async function reorderTask(id: string, direction: 'up' | 'down') {
 	const task = tasks.find(t => t.id === id);
 	if (!task) return;
-	const active = tasks.filter(t => !t.completed && t.tabId === task.tabId).sort((a, b) => a.order - b.order);
+	// Swap within the visible section; neighbours in other sections are not "up" or "down".
+	const groups = groupActiveTasks(tasks.filter(t => t.tabId === task.tabId));
+	const active = Object.values(groups).find(g => g.some(t => t.id === id)) ?? [];
 	const idx    = active.findIndex(t => t.id === id);
 	const swap   = direction === 'up' ? idx - 1 : idx + 1;
 	if (swap < 0 || swap >= active.length) return;
@@ -264,7 +274,7 @@ export async function moveTask(draggedId: string, targetId: string, position: 'b
 
 	if (_userId && changed.length > 0) {
 		const batch = writeBatch(firestore);
-		changed.forEach(t => batch.update(taskDoc(_userId, t.id), stripUndefined({ order: t.order, dueDate: t.dueDate, updatedAt: t.updatedAt })));
+		changed.forEach(t => batch.update(taskDoc(_userId, t.id), clearUndefined({ order: t.order, dueDate: t.dueDate, updatedAt: t.updatedAt })));
 		await batch.commit();
 	}
 }
@@ -331,7 +341,7 @@ export function exportTasks() {
 	const a    = document.createElement('a');
 	a.href     = url;
 	const tabName = tabs.find(t => t.id === todoUI.activeTabId)?.name ?? 'tasks';
-	a.download = `${tabName}-${new Date().toISOString().slice(0, 10)}.json`;
+	a.download = `${tabName}-${todayStr()}.json`;
 	a.click();
 	URL.revokeObjectURL(url);
 }
@@ -345,10 +355,41 @@ function stripUndefined<T extends object>(obj: T): Partial<T> {
 	) as Partial<T>;
 }
 
+/** For updates: a field set to undefined must be removed from the doc, or the snapshot restores it */
+function clearUndefined<T extends object>(obj: T): Record<string, unknown> {
+	return Object.fromEntries(
+		Object.entries(obj).map(([k, v]) => [k, v === undefined ? deleteField() : v])
+	);
+}
+
 // ── Date helpers ──────────────────────────────────────────────────────────
 
+/**
+ * Format a Date as YYYY-MM-DD in the *local* calendar.
+ *
+ * toISOString() converts to UTC first, so for anyone ahead of UTC it reports the previous
+ * day for much of their morning — "tomorrow" would store today. Every date in this file
+ * goes through here so the parser and the filters can never disagree about what day it is.
+ */
+export function toLocalISODate(d: Date): string {
+	const y  = d.getFullYear();
+	const m  = String(d.getMonth() + 1).padStart(2, '0');
+	const dd = String(d.getDate()).padStart(2, '0');
+	return `${y}-${m}-${dd}`;
+}
+
+// Read by todayStr and formatDueDate so sections and date pills recompute when the day changes.
+let _currentDay = $state(toLocalISODate(new Date()));
+
+/** Keeps the date-based views right across midnight. Returns a stop function. */
+export function watchDayChange(): () => void {
+	const id = setInterval(() => { _currentDay = toLocalISODate(new Date()); }, 30_000);
+	return () => clearInterval(id);
+}
+
 export function todayStr(): string {
-	return new Date().toISOString().slice(0, 10);
+	void _currentDay;
+	return toLocalISODate(new Date());
 }
 
 export function parseNaturalDate(input: string): string | undefined {
@@ -356,35 +397,99 @@ export function parseNaturalDate(input: string): string | undefined {
 	const today = new Date();
 	today.setHours(0, 0, 0, 0);
 
-	if (s === 'today')     return today.toISOString().slice(0, 10);
-	if (s === 'tomorrow')  { const d = new Date(today); d.setDate(d.getDate() + 1); return d.toISOString().slice(0, 10); }
-	if (s === 'yesterday') { const d = new Date(today); d.setDate(d.getDate() - 1); return d.toISOString().slice(0, 10); }
-	if (s === 'next week') { const d = new Date(today); d.setDate(d.getDate() + 7); return d.toISOString().slice(0, 10); }
+	const shift = (days: number) => {
+		const d = new Date(today);
+		d.setDate(d.getDate() + days);
+		return toLocalISODate(d);
+	};
 
-	const days  = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
-	const dayIdx = days.indexOf(s);
+	if (s === 'today')      return toLocalISODate(today);
+	if (s === 'tomorrow')   return shift(1);
+	if (s === 'tmrw')       return shift(1);
+	if (s === 'yesterday')  return shift(-1);
+	if (s === 'next week')  return shift(7);
+	if (s === 'next month') {
+		// Clamp, so 31 Jan gives the end of February rather than overflowing into March.
+		const lastDay = new Date(today.getFullYear(), today.getMonth() + 2, 0).getDate();
+		return toLocalISODate(new Date(today.getFullYear(), today.getMonth() + 1, Math.min(today.getDate(), lastDay)));
+	}
+
+	// "in 3 days" / "in 2 weeks"
+	const rel = s.match(/^in (\d{1,3}) (day|days|week|weeks)$/);
+	if (rel) return shift(parseInt(rel[1]) * (rel[2].startsWith('week') ? 7 : 1));
+
+	const days = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
+	const bare = s.replace(/^(next|this)\s+/, '');
+	const dayIdx = days.indexOf(bare);
 	if (dayIdx !== -1) {
-		const d    = new Date(today);
 		const diff = (dayIdx - today.getDay() + 7) % 7 || 7;
-		d.setDate(d.getDate() + diff);
-		return d.toISOString().slice(0, 10);
+		return shift(s.startsWith('next ') && diff < 7 ? diff + 7 : diff);
 	}
 	return undefined;
 }
 
-export function extractDueDate(raw: string): { title: string; dueDate?: string } {
-	const words = raw.trim().split(/\s+/);
-	if (words.length < 2) return { title: raw };
-	const parsed = parseNaturalDate(words[words.length - 1]);
-	if (parsed) return { title: words.slice(0, -1).join(' '), dueDate: parsed };
-	if (words.length >= 3) {
-		const parsed2 = parseNaturalDate(words.slice(-2).join(' '));
-		if (parsed2) return { title: words.slice(0, -2).join(' '), dueDate: parsed2 };
+// Longest phrases first so "next week" wins over "week" and "next monday" over "monday".
+const WEEKDAY = 'sunday|monday|tuesday|wednesday|thursday|friday|saturday';
+const DATE_WORDS = `next month|next week|in \\d{1,3} (?:days?|weeks?)|(?:next|this) (?:${WEEKDAY})|today|tomorrow|tmrw|yesterday|${WEEKDAY}`;
+// "by"/"due" lead any date; "on" only a weekday, so "Turn on today" keeps its "on".
+const DATE_LEAD = `(?:by\\s+|due\\s+|on\\s+(?=(?:(?:next|this)\\s+)?(?:${WEEKDAY})\\b))`;
+// A date word only counts where it reads as a date: at the end, after by/due/on, or an
+// unambiguous lead-in. "Buy sunday paper" and "Review yesterday's notes" stay as typed.
+const DATE_PATTERNS = [
+	new RegExp(`(?:^|\\s)${DATE_LEAD}?(${DATE_WORDS})\\s*$`, 'i'),
+	new RegExp(`(?:^|\\s)${DATE_LEAD}(${DATE_WORDS})(?=\\s|$)`, 'i'),
+	new RegExp(`^(today|tomorrow|tmrw|next month|next week|in \\d{1,3} (?:days?|weeks?)|(?:next|this) (?:${WEEKDAY}))(?=\\s)`, 'i'),
+];
+
+/**
+ * Pull a due date, #tags and a p:priority out of what the user typed, wherever they appear.
+ * Previously only the final word or two was scanned, so "Ship the report tomorrow #docs"
+ * kept the whole string as its title. The tag and priority syntax matches the filter
+ * syntax the shortcuts panel already documents.
+ */
+export function extractDueDate(raw: string): {
+	title: string; dueDate?: string; tags: string[]; priority: 0 | 1 | 2 | 3;
+} {
+	let text = raw.trim();
+	let dueDate: string | undefined;
+	const tags: string[] = [];
+	let priority: 0 | 1 | 2 | 3 = 0;
+
+	// Tags and priority come out first: "Report #today" is a tag, and a date followed only
+	// by metadata ("Ship tomorrow #docs") is still at the end of the text.
+	text = text.replace(/(^|\s)#([\p{L}\p{N}\p{M}\p{Extended_Pictographic}‍_-]+)/gu, (_m, _s, tag) => {
+		const t = tag.toLowerCase();
+		if (!tags.includes(t)) tags.push(t);
+		return ' ';
+	});
+
+	const prio = text.match(/(^|\s)(?:p:(low|med|medium|high)|!p([1-3]))(?=\s|$)/i);
+	if (prio) {
+		const named = prio[2]?.toLowerCase();
+		priority = named
+			? (named === 'high' ? 3 : named === 'low' ? 1 : 2)
+			: (4 - parseInt(prio[3])) as 1 | 2 | 3;
+		text = text.replace(prio[0], ' ');
 	}
-	return { title: raw };
+
+	text = text.replace(/\s{2,}/g, ' ').trim();
+	for (const pattern of DATE_PATTERNS) {
+		const m = text.match(pattern);
+		const parsed = m ? parseNaturalDate(m[1].replace(/\s+/g, ' ')) : undefined;
+		if (m && parsed) {
+			dueDate = parsed;
+			text = `${text.slice(0, m.index)} ${text.slice(m.index! + m[0].length)}`;
+			break;
+		}
+	}
+
+	const title = text.replace(/\s{2,}/g, ' ').trim();
+	// Never hand back an empty title — if the input was only metadata, keep the raw text.
+	return { title: title || raw.trim(), dueDate, tags, priority };
 }
 
 export function formatDueDate(dueDate: string): { label: string; status: 'overdue' | 'today' | 'soon' | 'future' } {
+	void _currentDay;
 	const today = new Date(); today.setHours(0, 0, 0, 0);
 	const due   = new Date(dueDate + 'T00:00:00');
 	const diff  = Math.round((due.getTime() - today.getTime()) / 86400000);

@@ -9,12 +9,19 @@
   --color-border-subtle: #1f1f1f;
   --color-text-primary: #e8e8e8;
   --color-text-secondary: #888888;
-  --color-text-muted: #555555;
+  /* 4.85:1 on the #0f0f0f background — clears WCAG AA (4.5:1) with a little margin.
+     The previous #555 measured 2.57:1 and was carrying inactive tabs, preset chips
+     and hint text. #7b7b7b is the exact break-even point; this sits just above it. */
+  --color-text-muted: #808080;
+  /* Kept for genuinely decorative marks: separators, disabled states, watermarks. */
   --color-text-faint: #555555;
   --color-accent-timer: #6c8ebf;
   --color-accent-notes: #82b366;
   --color-accent-todo: #b5866b;
   --color-accent-calc: #9673a6;
+  --color-accent: #3d4fe0;
+  --color-on-accent: #ffffff;
+  --color-danger: #c23b3b;
 
   --font-family-mono: 'JetBrains Mono', monospace;
 
@@ -24,14 +31,16 @@
 
 html, body {
   height: 100%;
-  background-color: #0f0f0f;
-  color: #e8e8e8;
-  font-family: 'JetBrains Mono', monospace;
+  background-color: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  font-family: 'Manrope', system-ui, sans-serif;
   overflow: hidden;
 }
 
-button {
-  cursor: pointer;
+@layer base {
+  button {
+    cursor: pointer;
+  }
 }
 
 /* Respect the OS setting — panel slides, spinners and toasts all animate by default. */
@@ -46,14 +55,16 @@ button {
   }
 }
 
-/* A visible focus ring on a near-black background — the browser default is easy to lose. */
-:focus-visible {
-  outline: 2px solid var(--color-accent-timer);
-  outline-offset: 2px;
-  border-radius: 3px;
+/* In the base layer so a field's own `outline-none` still wins, and with no
+   border-radius so a focused control keeps its shape. */
+@layer base {
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
 }
 
-/* Ripple theme (see DESIGN.md). Scoped so tools can move over one at a time. */
+/* Ripple theme (see DESIGN.md), applied to <html> in app.html. */
 .ripple {
   --color-bg-primary: #eceff7;
   --color-bg-surface: #ffffff;
@@ -65,8 +76,11 @@ button {
   --color-text-primary: #171a2b;
   --color-text-secondary: #5f6680;
   --color-text-muted: #5f6680;
-  --color-text-faint: #7a809a;
+  --color-text-faint: #6b7189;
   --color-accent: #3d4fe0;
+  --color-accent-timer: #3d4fe0;
+  --color-accent-notes: #3d4fe0;
+  --color-accent-todo: #3d4fe0;
   --color-accent-calc: #3d4fe0;
   --color-accent-soft: #e3e6ff;
   --color-on-accent: #ffffff;
@@ -100,8 +114,11 @@ button {
   --color-text-primary: #ececee;
   --color-text-secondary: #a3a5ac;
   --color-text-muted: #a3a5ac;
-  --color-text-faint: #7f828a;
+  --color-text-faint: #8d9098;
   --color-accent: #7f8cff;
+  --color-accent-timer: #7f8cff;
+  --color-accent-notes: #7f8cff;
+  --color-accent-todo: #7f8cff;
   --color-accent-calc: #7f8cff;
   --color-accent-soft: #2a2c45;
   --color-on-accent: #101114;
@@ -119,6 +136,13 @@ button {
 }
 
 .ripple :focus-visible { outline-color: var(--color-accent); }
+
+.ripple button:active:not(:disabled) {
+  transform: scale(0.96);
+  transition: transform 120ms var(--ease-out);
+}
+/* 4% of a full-width row is a visible lurch */
+.ripple button.w-full:active:not(:disabled) { transform: none; }
 
 .rip {
   position: absolute;

@@ -3,6 +3,7 @@
 		notesUI,
 		getActiveNote,
 		getVisibleNotes,
+		getFolders,
 		createNote,
 		deleteNote,
 		undoDelete,
@@ -19,6 +20,15 @@
 
 	let overlayOpen = $state(false);
 	let fileInputEl = $state<HTMLInputElement | null>(null);
+	let wrapEl = $state<HTMLDivElement | null>(null);
+
+	// Folders exist only while a note is in them, so the last note leaving ends the view.
+	$effect(() => {
+		const folder = notesUI.selectedFolder;
+		if (folder && folder !== '__trash__' && !notesUI.isLoading && !getFolders().includes(folder)) {
+			notesUI.selectedFolder = null;
+		}
+	});
 
 	function handleImportClick() {
 		fileInputEl?.click();
@@ -36,6 +46,8 @@
 	function handleKeydown(e: KeyboardEvent) {
 		const ctrl = e.ctrlKey || e.metaKey;
 		if (!ctrl) return;
+		// This stays mounted inside closed side panels; don't act on notes nobody can see.
+		if (!wrapEl || wrapEl.closest('[inert]')) return;
 
 		// New note — works from anywhere
 		if (!e.shiftKey && e.key === 'n') {
@@ -96,8 +108,8 @@
 	onchange={handleFileImport}
 />
 
-<div class="notes-wrap">
-	<!-- Sidebar — wide mode only (CSS) -->
+<div class="notes-wrap" bind:this={wrapEl} class:zen={notesUI.zenMode}>
+	<!-- Sidebar — wide mode only (CSS), and hidden entirely in zen mode -->
 	<div class="notes-sidebar">
 		<NotesSidebar onImportClick={handleImportClick} />
 	</div>
@@ -112,7 +124,7 @@
 			<!-- Narrow mode header (overlay toggle + note title) -->
 			<div class="narrow-header flex items-center gap-2 px-3 py-2 border-b border-border-subtle shrink-0">
 				<button
-					class="p-1.5 rounded text-text-muted hover:text-text-primary hover:bg-bg-hover transition-colors shrink-0"
+					class="list-toggle p-1.5 rounded text-text-muted hover:text-text-primary hover:bg-bg-hover transition-colors shrink-0"
 					onclick={() => overlayOpen = true}
 					title="Notes list"
 				>
@@ -120,9 +132,9 @@
 						<path d="M1 3h12M1 7h12M1 11h12" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
 					</svg>
 				</button>
-				<span class="text-xs text-text-secondary truncate">
-					{activeNote?.title || 'Untitled'}
-				</span>
+				<!-- The editor below shows the note title in its own editable field, so
+				     repeating it here just spent 40px of a phone screen saying it twice. -->
+				<span class="text-xs text-text-secondary truncate">Notes</span>
 			</div>
 
 			<div class="flex-1 overflow-hidden relative">
@@ -185,6 +197,12 @@
 		min-width: 0;
 	}
 
+	/* Zen mode overrides every layout rule below — nothing but the writing surface. */
+	.notes-wrap.zen .notes-sidebar,
+	.notes-wrap.zen .narrow-header {
+		display: none !important;
+	}
+
 	/* Wide layout: sidebar visible, narrow header hidden */
 	@container (min-width: 580px) {
 		.notes-sidebar {
@@ -194,6 +212,11 @@
 		.narrow-header {
 			display: none;
 		}
+	}
+
+	@media (pointer: coarse) {
+		.list-toggle { position: relative; }
+		.list-toggle::after { content: ''; position: absolute; inset: -7px; }
 	}
 
 	/* Undo toast */
