@@ -34,6 +34,25 @@ button {
   cursor: pointer;
 }
 
+/* Respect the OS setting — panel slides, spinners and toasts all animate by default. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* A visible focus ring on a near-black background — the browser default is easy to lose. */
+:focus-visible {
+  outline: 2px solid var(--color-accent-timer);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
 /* Ripple theme (see DESIGN.md). Scoped so tools can move over one at a time. */
 .ripple {
   --color-bg-primary: #eceff7;
