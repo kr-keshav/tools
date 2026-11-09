@@ -8,6 +8,7 @@
 		clearSheet,
 		linesOf,
 		undoDelete,
+		saveCalcPrefs,
 	} from '$lib/stores/calcState.svelte';
 	import { prepareInput, formatNumber } from '$lib/calc/engine';
 	import {
@@ -17,13 +18,17 @@
 		setLabel,
 		summarizeTags,
 		syntaxError,
+		tagTone,
 		toDisplay,
 		toStored,
 	} from '$lib/calc/tape';
 	import CalcLineRow from './CalcLineRow.svelte';
 	import CalcKeypad, { type KeyAction } from './CalcKeypad.svelte';
 	import CalcSheetTabs from './CalcSheetTabs.svelte';
-	import { setCalcContext } from './calcContext';
+	import CalcScratch from './CalcScratch.svelte';
+	import CalcRollingValue from './CalcRollingValue.svelte';
+	import { bumpOn, markFresh } from '$lib/calc/motion';
+	import { setCalcContext, type CalcField } from './calcContext';
 
 	let draft = $state('');
 	/** Optional label typed into its own field, so labelling never needs the `Label:` syntax. */
@@ -37,11 +42,42 @@
 	let historyIdx = $state<number | null>(null);
 	let confirmClear = $state(false);
 	let confirmTimer: ReturnType<typeof setTimeout> | null = null;
+	/** The line's field while one is being edited; the keypad types there instead of the entry. */
+	let editField = $state.raw<CalcField | null>(null);
+	let scratch = $state<ReturnType<typeof CalcScratch> | null>(null);
+	let liveEdit = $state.raw<{ id: string; input: string } | null>(null);
+	const entryField: CalcField = {
+		get el() { return inputEl; },
+		get value() { return draft; },
+		set: (next) => setDraft(next),
+		commit: () => commit(),
+	};
 
 	// Every sheet is re-evaluated through its dependency graph on every change, so editing
 	// one line flows into every @ref, name, #tag and parent `sub` that reads it.
-	const allResults = $derived(evaluateSheets(calcSheets, calcLines, calcUI.angle));
-	setCalcContext({ get results() { return allResults; } });
+	// A line being edited counts with its unsaved text, so the tape reacts as you type.
+	const allResults = $derived(
+		evaluateSheets(
+			calcSheets,
+			liveEdit ? calcLines.map((l) => (l.id === liveEdit!.id ? { ...l, input: liveEdit!.input } : l)) : calcLines,
+			calcUI.angle,
+		),
+	);
+	setCalcContext({
+		get results() { return allResults; },
+		beginEdit(id, field) {
+			editField = field;
+			liveEdit = { id, input: calcLines.find((l) => l.id === id)?.input ?? '' };
+		},
+		previewEdit(input) {
+			if (liveEdit) liveEdit = { id: liveEdit.id, input };
+		},
+		endEdit(field) {
+			if (editField !== field) return;
+			editField = null;
+			liveEdit = null;
+		},
+	});
 
 	const sheetLines = $derived(linesOf(calcUI.activeSheetId));
 	const results = $derived(allResults.get(calcUI.activeSheetId) ?? []);
@@ -128,6 +164,7 @@
 			entryError = err;
 			return;
 		}
+		markFresh();
 		addLine(toStored(labelDraft.trim() ? setLabel(input, labelDraft) : input, sheetLines));
 		setDraft('');
 		labelDraft = '';
@@ -176,53 +213,61 @@
 	}
 
 	async function insert(text: string) {
+		const field = editField ?? entryField;
+		const isEntry = field === entryField;
 		// An operator on an empty field continues from the last result, like a desk calculator
-		if (!draft.trim() && /^[+×÷^-]$/.test(text) && sheetLines.length > 0) text = 'ans' + text;
+		if (isEntry && !draft.trim() && /^[+×÷^-]$/.test(text) && sheetLines.length > 0) text = 'ans' + text;
 
-		const el = inputEl;
+		const el = field.el;
+		const value = field.value;
 		const focused = el && document.activeElement === el;
-		const start = focused ? (el.selectionStart ?? draft.length) : draft.length;
-		const end = focused ? (el.selectionEnd ?? draft.length) : draft.length;
-		setDraft(draft.slice(0, start) + text + draft.slice(end));
+		const start = focused ? (el.selectionStart ?? value.length) : value.length;
+		const end = focused ? (el.selectionEnd ?? value.length) : value.length;
+		field.set(value.slice(0, start) + text + value.slice(end));
 
 		await tick();
 		el?.focus();
 		el?.setSelectionRange(start + text.length, start + text.length);
-		caret = start + text.length;
+		if (isEntry) caret = start + text.length;
 	}
 
 	async function backspace() {
-		const el = inputEl;
+		const field = editField ?? entryField;
+		const el = field.el;
+		const value = field.value;
 		const focused = el && document.activeElement === el;
-		let start = focused ? (el.selectionStart ?? draft.length) : draft.length;
-		const end = focused ? (el.selectionEnd ?? draft.length) : draft.length;
+		let start = focused ? (el.selectionStart ?? value.length) : value.length;
+		const end = focused ? (el.selectionEnd ?? value.length) : value.length;
 		if (start === end) start = Math.max(0, start - 1);
-		setDraft(draft.slice(0, start) + draft.slice(end));
+		field.set(value.slice(0, start) + value.slice(end));
 		await tick();
 		el?.setSelectionRange(start, start);
-		caret = start;
+		if (field === entryField) caret = start;
 	}
 
 	function handleAction(action: KeyAction) {
-		const hasPrev = sheetLines.length > 0;
-		const s = draft.trim();
+		const field = editField ?? entryField;
+		// `ans` shortcuts on an empty field are for new lines only
+		const hasPrev = field === entryField && sheetLines.length > 0;
+		const s = field.value.trim();
 		switch (action) {
-			case 'clear':  setDraft(''); break;
+			case 'clear':  field.set(''); break;
 			case 'back':   backspace(); break;
-			case 'equals': commit(); break;
+			case 'equals': field.commit(); break;
 			case 'sign': {
 				const wrapped = /^-\((.*)\)$/.exec(s);
-				if (wrapped) setDraft(wrapped[1]);
-				else if (s) setDraft(`-(${s})`);
-				else if (hasPrev) setDraft('-ans');
+				if (wrapped) field.set(wrapped[1]);
+				else if (s) field.set(`-(${s})`);
+				else if (hasPrev) field.set('-ans');
 				break;
 			}
 			case 'recip':
-				if (s) setDraft(`1÷(${s})`);
-				else if (hasPrev) setDraft('1÷ans');
+				if (s) field.set(`1÷(${s})`);
+				else if (hasPrev) field.set('1÷ans');
 				break;
 		}
-		inputEl?.focus();
+		// After `=` on a line, editField is clear again and focus returns to the entry
+		(editField ?? entryField).el?.focus();
 	}
 
 	function handleLabelKey(e: KeyboardEvent) {
@@ -252,6 +297,11 @@
 		calcUI.activeTag = calcUI.activeTag === tag ? null : tag;
 	}
 
+	function toggleTheme() {
+		calcUI.theme = calcUI.theme === 'dark' ? 'light' : 'dark';
+		saveCalcPrefs();
+	}
+
 	function handleClear() {
 		if (!confirmClear) {
 			confirmClear = true;
@@ -270,12 +320,25 @@
 	<section class="tape-col">
 		<div class="toolbar">
 			<CalcSheetTabs />
+			<span class="toolbar-gap"></span>
 			{#if sheetLines.length > 0}
 				<span class="count">{sheetLines.length} {sheetLines.length === 1 ? 'line' : 'lines'}</span>
 				<button class="clear-btn" class:confirm={confirmClear} onclick={handleClear}>
 					{confirmClear ? 'Click again to clear' : 'Clear'}
 				</button>
 			{/if}
+			<button
+				class="theme-btn"
+				onclick={toggleTheme}
+				aria-label={calcUI.theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+				title={calcUI.theme === 'dark' ? 'Light mode' : 'Dark mode'}
+			>
+				{#if calcUI.theme === 'dark'}
+					<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="2.6" stroke="currentColor" stroke-width="1.2"/><path d="M7 1v1.4M7 11.6V13M1 7h1.4M11.6 7H13M2.8 2.8l1 1M10.2 10.2l1 1M2.8 11.2l1-1M10.2 3.8l1-1" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+				{:else}
+					<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M11.8 8.6A5 5 0 0 1 5.4 2.2a5 5 0 1 0 6.4 6.4z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>
+				{/if}
+			</button>
 		</div>
 
 		{#if pinned.length > 0}
@@ -283,13 +346,14 @@
 				{#each pinned as { line, i, info } (line.id)}
 					<button
 						class="pin"
+						use:bumpOn={info.value}
 						onclick={() => insert(info.name ?? `@${i + 1}`)}
 						title="Insert {info.name ?? `@${i + 1}`}"
 					>
 						<span class="pin-name">{info.label ?? info.name ?? `@${i + 1}`}</span>
 						<span class="pin-value" class:err={info.value === undefined}>
-							{info.value !== undefined ? formatNumber(info.value) : 'error'}
-						</span>
+							<CalcRollingValue text={info.value !== undefined ? formatNumber(info.value) : 'error'} delay={240} />
+</span>
 					</button>
 				{/each}
 			</div>
@@ -301,12 +365,14 @@
 				{#each tagStats as s (s.tag)}
 					<button
 						class="chip tag"
+						style:--tag-fg="var(--tag-{tagTone(s.tag)}-fg)"
+						use:bumpOn={s.total}
 						class:on={calcUI.activeTag === s.tag}
 						onclick={() => toggleTag(s.tag)}
 						title="{s.count} {s.count === 1 ? 'line' : 'lines'}{s.errors ? ` · ${s.errors} with errors` : ''} — use #{s.tag} in a calculation for this total"
 					>
 						<span class="chip-name">#{s.tag}</span>
-						<span class="chip-total">{formatNumber(s.total)}</span>
+						<span class="chip-total"><CalcRollingValue text={formatNumber(s.total)} delay={120} /></span>
 						{#if s.errors}<span class="chip-warn" aria-label="has errors">!</span>{/if}
 					</button>
 				{/each}
@@ -328,8 +394,17 @@
 					</ul>
 				</div>
 			{:else}
-				{#each visible as { line, i, info } (line.id)}
-					<CalcLineRow {line} index={i} {info} {idIndex} {names} onUse={insert} />
+				{#each sheetLines as line, i (line.id)}
+					{@const info = results[i] ?? { expr: '', tags: [] }}
+					<CalcLineRow
+						{line}
+						index={i}
+						{info}
+						{idIndex}
+						{names}
+						hidden={!!calcUI.activeTag && !info.tags.includes(calcUI.activeTag)}
+						onUse={insert}
+					/>
 				{/each}
 			{/if}
 		</div>
@@ -406,8 +481,13 @@
 		</div>
 	</section>
 
-	<aside class="keypad-col">
-		<CalcKeypad onInsert={insert} onAction={handleAction} />
+	<aside class="keypad-col" class:editing={editField !== null}>
+		<CalcScratch
+			bind:this={scratch}
+			onTarget={(field) => (editField = field)}
+			onRelease={(field) => { if (editField === field) editField = null; }}
+		/>
+		<CalcKeypad onInsert={insert} onAction={handleAction} onScratch={() => scratch?.show()} />
 	</aside>
 </div>
 
@@ -421,6 +501,11 @@
 		max-width: 760px;
 		margin: 0 auto;
 	}
+	.tape-col, .keypad-col { animation: rise 600ms var(--ease-out) backwards; }
+	.keypad-col { animation-delay: 80ms; }
+	@keyframes rise {
+		from { transform: translateY(26px); opacity: 0; }
+	}
 
 	.tape-col {
 		position: relative;
@@ -428,6 +513,7 @@
 		min-height: 0;
 		display: flex;
 		flex-direction: column;
+		background: var(--color-bg-surface);
 	}
 
 	.toolbar {
@@ -439,7 +525,22 @@
 		border-bottom: 1px solid var(--color-border-subtle);
 		flex-shrink: 0;
 	}
-	.count { font-size: 0.65rem; color: var(--color-text-muted); flex-shrink: 0; margin-left: auto; }
+	.toolbar-gap { flex: 1; }
+	.count { font-size: 0.65rem; color: var(--color-text-muted); flex-shrink: 0; }
+	.theme-btn {
+		display: flex;
+		flex-shrink: 0;
+		align-items: center;
+		justify-content: center;
+		width: 26px;
+		height: 26px;
+		background: none;
+		border: none;
+		border-radius: 7px;
+		color: var(--color-text-muted);
+		transition: color 0.1s, background 0.1s;
+	}
+	.theme-btn:hover { color: var(--color-text-primary); background: var(--color-bg-hover); }
 
 	.clear-btn {
 		flex-shrink: 0;
@@ -454,8 +555,8 @@
 	}
 	.clear-btn:hover { color: var(--color-text-primary); background: var(--color-bg-hover); }
 	.clear-btn.confirm {
-		color: #c96b6b;
-		border-color: color-mix(in srgb, #c96b6b 40%, transparent);
+		color: var(--color-danger);
+		border-color: color-mix(in srgb, var(--color-danger) 40%, transparent);
 	}
 
 	.pin-strip {
@@ -463,7 +564,6 @@
 		gap: 0.375rem;
 		padding: 0.5rem 0.75rem;
 		border-bottom: 1px solid var(--color-border-subtle);
-		background: color-mix(in srgb, var(--color-accent-calc) 4%, transparent);
 		overflow-x: auto;
 		scrollbar-width: none;
 		flex-shrink: 0;
@@ -474,30 +574,32 @@
 		align-items: baseline;
 		gap: 0.5rem;
 		flex-shrink: 0;
-		background: var(--color-bg-surface);
-		border: 1px solid color-mix(in srgb, var(--color-accent-calc) 25%, var(--color-border-subtle));
-		border-radius: 7px;
-		padding: 0.25rem 0.6rem;
+		background: var(--color-accent);
+		border: none;
+		border-radius: 13px;
+		padding: 0.4rem 0.8rem;
 		font-family: inherit;
 		text-align: left;
-		transition: border-color 0.1s;
+		transition: filter 0.1s;
 	}
-	.pin:hover { border-color: color-mix(in srgb, var(--color-accent-calc) 55%, transparent); }
+	.pin:hover { filter: brightness(1.08); }
 	.pin-name {
 		max-width: 12rem;
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
 		font-size: 0.65rem;
-		color: var(--color-text-muted);
+		font-weight: 600;
+		color: var(--color-on-accent);
+		opacity: 0.8;
 	}
 	.pin-value {
-		font-size: 0.85rem;
-		font-weight: 500;
-		color: var(--color-text-primary);
+		font-size: 1.05rem;
+		font-weight: 800;
+		color: var(--color-on-accent);
 		font-variant-numeric: tabular-nums;
 	}
-	.pin-value.err { font-size: 0.7rem; color: #c96b6b; }
+	.pin-value.err { font-size: 0.7rem; }
 
 	.tag-strip {
 		display: flex;
@@ -520,23 +622,22 @@
 		border-radius: 12px;
 		padding: 0.2rem 0.6rem;
 		font-family: inherit;
-		font-size: 0.65rem;
+		font-size: 0.66rem;
+		font-weight: 600;
 		color: var(--color-text-secondary);
-		transition: color 0.1s, border-color 0.1s, background 0.1s;
+		transition: color 0.2s, border-color 0.2s, background 0.2s;
 	}
 	.chip:hover { color: var(--color-text-primary); background: var(--color-bg-hover); }
 	.chip.on {
-		color: var(--color-text-primary);
-		border-color: color-mix(in srgb, var(--color-accent-calc) 50%, transparent);
-		background: color-mix(in srgb, var(--color-accent-calc) 12%, transparent);
+		color: var(--color-bg-surface);
+		border-color: var(--color-text-primary);
+		background: var(--color-text-primary);
 	}
-	.chip.tag .chip-name { color: var(--color-accent-notes); }
-	.chip.tag.on {
-		border-color: color-mix(in srgb, var(--color-accent-notes) 50%, transparent);
-		background: color-mix(in srgb, var(--color-accent-notes) 12%, transparent);
-	}
+	.chip.on:hover { color: var(--color-bg-surface); background: var(--color-text-primary); }
+	.chip.tag .chip-name { color: var(--tag-fg); }
+	.chip.tag.on .chip-name, .chip.on .chip-total { color: var(--color-bg-surface); }
 	.chip-total { font-variant-numeric: tabular-nums; color: var(--color-text-primary); }
-	.chip-warn { color: #c96b6b; font-weight: 600; }
+	.chip-warn { color: var(--color-danger); font-weight: 600; }
 
 	.tape {
 		flex: 1;
@@ -578,7 +679,7 @@
 		font-size: 0.7rem;
 		flex-shrink: 0;
 	}
-	.filter-tag { color: var(--color-accent-notes); }
+	.filter-tag { color: var(--color-accent-calc); }
 	.filter-meta { color: var(--color-text-muted); }
 	.filter-total {
 		margin-left: auto;
@@ -664,7 +765,7 @@
 		gap: 0.5rem;
 		padding: 0.625rem 0.75rem;
 		border-top: 1px solid var(--color-border-default);
-		background: var(--color-bg-primary);
+		background: var(--color-bg-panel);
 		flex-shrink: 0;
 	}
 	.prompt { color: var(--color-accent-calc); font-size: 1.1rem; line-height: 1; }
@@ -675,7 +776,7 @@
 		width: 8rem;
 		background: var(--color-bg-surface);
 		border: 1px solid var(--color-border-subtle);
-		border-radius: 6px;
+		border-radius: 9px;
 		padding: 0.3rem 0.5rem;
 		font-family: inherit;
 		font-size: 0.75rem;
@@ -696,7 +797,8 @@
 		border: none;
 		outline: none;
 		font-family: inherit;
-		font-size: 1.15rem;
+		font-size: 1.1rem;
+		font-weight: 600;
 		color: var(--color-text-primary);
 		caret-color: var(--color-accent-calc);
 	}
@@ -713,7 +815,12 @@
 		font-variant-numeric: tabular-nums;
 	}
 	.preview.soft { font-size: 0.68rem; color: var(--color-text-faint); }
-	.preview.err { font-size: 0.7rem; color: #c96b6b; }
+	.preview.err { font-size: 0.7rem; color: var(--color-danger); }
+
+	/* The keypad is typing into a line on the tape, not the entry */
+	.keypad-col.editing :global(.keypad) {
+		box-shadow: 0 0 0 1.5px var(--color-accent), var(--shadow-card);
+	}
 
 	/* Wide screens: keypad sits beside the tape, which gets the full height */
 	@media (min-width: 1024px) {
@@ -724,18 +831,21 @@
 			gap: 1rem;
 		}
 		.tape-col {
-			border: 1px solid var(--color-border-subtle);
-			border-radius: 10px;
+			border-radius: 20px;
+			box-shadow: var(--shadow-card);
 			overflow: hidden;
 		}
 		.keypad-col {
-			width: 400px;
+			width: 340px;
 			flex-shrink: 0;
-			align-self: flex-end;
+			display: flex;
+			flex-direction: column;
+			justify-content: flex-end;
+			gap: 0.75rem;
 		}
 		.keypad-col :global(.keypad) {
-			border: 1px solid var(--color-border-subtle);
-			border-radius: 10px;
+			border-radius: 20px;
+			padding: 0.875rem;
 		}
 	}
 </style>

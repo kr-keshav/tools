@@ -9,6 +9,7 @@ import {
 	isReservedName,
 	parse,
 	splitTrailingTags,
+	TAG_RE,
 	walk,
 	type AngleMode,
 	type Node,
@@ -59,6 +60,26 @@ export function setLabel(input: string, label: string): string {
 	const rest = (m ? m[2] : input).trim();
 	const clean = cleanLabel(label);
 	return clean ? `${clean}: ${rest}` : rest;
+}
+
+/** Which of the five tag colours a tag gets. Stable, so a tag looks the same everywhere. */
+export function tagTone(tag: string): number {
+	let hash = 0;
+	for (const ch of tag) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
+	return hash % 5;
+}
+
+/** Append tags typed as `food`, `#food` or `food, bills` — skipping invalid and repeated ones. */
+export function addTags(input: string, raw: string): string {
+	const seen = new Set(splitLine(input).tags);
+	const tagRe = new RegExp(`^${TAG_RE.source}$`, 'i');
+	const added: string[] = [];
+	for (const word of raw.toLowerCase().split(/[\s,#]+/)) {
+		if (!word || seen.has(word) || !tagRe.test('#' + word)) continue;
+		seen.add(word);
+		added.push('#' + word);
+	}
+	return added.length ? `${input.trimEnd()} ${added.join(' ')}` : input;
 }
 
 function message(e: unknown): string {

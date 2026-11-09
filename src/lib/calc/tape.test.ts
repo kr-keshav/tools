@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
+	addTags,
 	evaluateSheets,
 	evaluateTape,
 	highlight,
 	indexById,
 	setLabel,
 	splitLine,
+	tagTone,
 	summarizeTags,
 	syntaxError,
 	toDisplay,
@@ -31,6 +33,30 @@ describe('splitLine', () => {
 		expect(splitLine('Q3 2026 (est): 100').label).toBe('Q3 2026 (est)');
 		expect(splitLine('sum(@1:@5)').label).toBeUndefined();
 		expect(splitLine('@1:@5').label).toBeUndefined();
+	});
+});
+
+describe('tagTone', () => {
+	it('gives a tag the same colour slot every time', () => {
+		expect(tagTone('food')).toBe(tagTone('food'));
+		for (const tag of ['home', 'bills', 'food', 'tax', 'car']) {
+			expect(tagTone(tag)).toBeGreaterThanOrEqual(0);
+			expect(tagTone(tag)).toBeLessThan(5);
+		}
+	});
+});
+
+describe('addTags', () => {
+	it('appends tags in any of the accepted spellings', () => {
+		expect(addTags('450 + 380', 'food')).toBe('450 + 380 #food');
+		expect(addTags('450', '#Food, bills')).toBe('450 #food #bills');
+		expect(splitLine(addTags('Swiggy: x = 5 #a', 'b')).tags).toEqual(['a', 'b']);
+	});
+
+	it('skips repeated and invalid tags', () => {
+		expect(addTags('450 #food', 'FOOD')).toBe('450 #food');
+		expect(addTags('450', 'a.b')).toBe('450');
+		expect(addTags('450', '   ')).toBe('450');
 	});
 });
 

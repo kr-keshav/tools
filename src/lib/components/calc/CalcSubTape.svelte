@@ -5,6 +5,7 @@
 	import { evaluateTape, indexById, syntaxError, toStored, type LineInfo } from '$lib/calc/tape';
 	import { getCalcContext } from './calcContext';
 	import CalcLineRow from './CalcLineRow.svelte';
+	import { markFresh } from '$lib/calc/motion';
 
 	let { sheetId, depth }: { sheetId: string; depth: number } = $props();
 
@@ -36,6 +37,7 @@
 			entryError = err;
 			return;
 		}
+		markFresh();
 		addLine(toStored(input, lines), sheetId);
 		draft = '';
 		entryError = null;
@@ -131,5 +133,5 @@
 		color: var(--color-text-muted);
 		font-variant-numeric: tabular-nums;
 	}
-	.preview.err { font-size: 0.68rem; color: #c96b6b; }
+	.preview.err { font-size: 0.68rem; color: var(--color-danger); }
 </style>

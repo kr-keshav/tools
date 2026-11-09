@@ -4,13 +4,16 @@
 
 <script lang="ts">
 	import { calcUI, saveCalcPrefs } from '$lib/stores/calcState.svelte';
+	import { ripple } from '$lib/calc/motion';
 
 	let {
 		onInsert,
 		onAction,
+		onScratch,
 	}: {
 		onInsert: (text: string) => void;
 		onAction: (action: KeyAction) => void;
+		onScratch: () => void;
 	} = $props();
 
 	type Key = { label: string; insert?: string; action?: KeyAction; kind?: 'op' | 'fn' | 'eq' | 'util'; wide?: boolean; title?: string };
@@ -89,7 +92,7 @@
 		class="key {key.kind ?? 'digit'}"
 		class:wide={key.wide}
 		title={key.title}
-		onpointerdown={(e) => e.preventDefault()}
+		onpointerdown={(e) => { e.preventDefault(); ripple(e); }}
 		onclick={() => press(key)}
 	>{key.label}</button>
 {/snippet}
@@ -97,11 +100,12 @@
 <div class="keypad">
 	<div class="bar">
 		<div class="seg" role="group" aria-label="Keypad mode">
-			<button class:on={calcUI.mode === 'basic'} onclick={() => setMode('basic')}>Basic</button>
-			<button class:on={calcUI.mode === 'sci'} onclick={() => setMode('sci')}>Scientific</button>
+			<button onpointerdown={(e) => e.preventDefault()} class:on={calcUI.mode === 'basic'} onclick={() => setMode('basic')}>Basic</button>
+			<button onpointerdown={(e) => e.preventDefault()} class:on={calcUI.mode === 'sci'} onclick={() => setMode('sci')}>Scientific</button>
 		</div>
 		<button
 			class="angle"
+			onpointerdown={(e) => e.preventDefault()}
 			onclick={toggleAngle}
 			title="Angle unit for sin, cos, tan — click to switch"
 		>{calcUI.angle === 'deg' ? 'DEG' : 'RAD'}</button>
@@ -113,7 +117,19 @@
 			<button onpointerdown={(e) => e.preventDefault()} onclick={() => onInsert(',')} title="Separate arguments: max(3, 5)">,</button>
 		</div>
 		<button
+			class="scratch-btn"
+			onclick={onScratch}
+			aria-label="Open disposable calculator"
+			title="Disposable calculator, not saved"
+		>
+			<svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+				<rect x="2.5" y="1.5" width="9" height="11" rx="2" stroke="currentColor" stroke-width="1.2"/>
+				<path d="M5 4.5h4M5 7.5h.01M7 7.5h.01M9 7.5h.01M5 10h.01M7 10h.01M9 10h.01" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+			</svg>
+		</button>
+		<button
 			class="fold-btn"
+			onpointerdown={(e) => e.preventDefault()}
 			onclick={toggleOpen}
 			aria-expanded={calcUI.keypadOpen}
 			title={calcUI.keypadOpen ? 'Hide keypad' : 'Show keypad'}
@@ -140,9 +156,11 @@
 
 <style>
 	.keypad {
-		border-top: 1px solid var(--color-border-subtle);
-		background: var(--color-bg-panel);
-		padding: 0.5rem 0.75rem 0.75rem;
+		background: var(--color-bg-surface);
+		border-radius: 22px 22px 0 0;
+		box-shadow: var(--shadow-card);
+		padding: 0.625rem;
+		transition: box-shadow 0.25s;
 	}
 
 	.bar {
@@ -169,8 +187,8 @@
 	}
 	.seg button:hover { color: var(--color-text-primary); }
 	.seg button.on {
-		color: var(--color-text-primary);
-		background: color-mix(in srgb, var(--color-accent-calc) 18%, transparent);
+		color: var(--color-bg-surface);
+		background: var(--color-text-primary);
 	}
 
 	.angle {
@@ -200,8 +218,28 @@
 	}
 	.sym button:hover { color: var(--color-text-primary); border-color: var(--color-text-muted); }
 
-	.fold-btn {
+	.scratch-btn {
+		position: relative;
 		margin-left: auto;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 26px;
+		height: 26px;
+		background: none;
+		border: 1px solid var(--color-border-default);
+		border-radius: 6px;
+		color: var(--color-text-secondary);
+	}
+	/* Reaches a 40px touch target without making the bar taller */
+	.scratch-btn::after { content: ''; position: absolute; inset: -7px -2px; }
+	/* Wide screens show the full button above the keypad instead */
+	@media (min-width: 1024px) {
+		.scratch-btn { display: none; }
+		.fold-btn { margin-left: auto; }
+	}
+
+	.fold-btn {
 		display: flex;
 		align-items: center;
 		justify-content: center;
@@ -233,30 +271,34 @@
 	.sci-grid   { grid-template-columns: repeat(3, 1fr); }
 
 	.key {
-		background: var(--color-bg-surface);
-		border: 1px solid var(--color-border-subtle);
-		border-radius: 8px;
+		position: relative;
+		overflow: hidden;
+		background: var(--key-digit);
+		border: none;
+		border-radius: 12px;
 		color: var(--color-text-primary);
 		font-family: inherit;
-		font-size: 0.95rem;
+		font-size: 1.05rem;
+		font-weight: 700;
 		touch-action: manipulation;
 		user-select: none;
-		transition: background 0.1s, border-color 0.1s;
+		transition: transform 120ms var(--ease-out), filter 0.1s;
 	}
-	.key:hover { background: var(--color-bg-hover); border-color: var(--color-border-default); }
-	.key:active { transform: translateY(1px); }
+	.key:hover { filter: brightness(0.97); }
+	.key:active { transform: scale(0.93); }
 	.key.wide { grid-column: span 2; }
 
-	.key.util { color: var(--color-text-secondary); font-size: 0.85rem; }
-	.key.fn   { color: var(--color-text-secondary); font-size: 0.75rem; background: var(--color-bg-panel); }
-	.key.op   { color: var(--color-accent-calc); font-size: 1.05rem; }
-	.key.eq {
-		background: color-mix(in srgb, var(--color-accent-calc) 22%, var(--color-bg-surface));
-		border-color: color-mix(in srgb, var(--color-accent-calc) 40%, transparent);
-		color: var(--color-text-primary);
-		font-size: 1.05rem;
+	.key.util, .key.fn { background: var(--key-util); color: var(--color-text-secondary); font-size: 0.875rem; font-weight: 600; }
+	.key.fn { font-size: 0.75rem; }
+	.key.op { background: var(--color-accent-soft); color: var(--key-op-text); }
+	.key.eq { background: var(--color-accent); color: var(--color-on-accent); font-size: 1.3rem; }
+
+	/* The smallest phones need the bar tightened to fit every control */
+	@media (max-width: 380px) {
+		.bar { gap: 0.25rem; }
+		.seg button { padding-inline: 0.4rem; }
+		.sym { gap: 0.125rem; }
 	}
-	.key.eq:hover { background: color-mix(in srgb, var(--color-accent-calc) 32%, var(--color-bg-surface)); }
 
 	/* Phones: scientific keys stack above the basic pad instead of beside it */
 	@media (max-width: 560px) {
@@ -267,6 +309,7 @@
 
 	/* Large screens have room for a real keyboard; keep the pad compact */
 	@media (min-width: 900px) {
-		.grid { grid-auto-rows: 40px; }
+		.grid { grid-auto-rows: 48px; }
+		.key { border-radius: 14px; }
 	}
 </style>

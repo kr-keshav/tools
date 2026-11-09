@@ -104,7 +104,7 @@
 		left: 0.5rem;
 		right: 0.5rem;
 		bottom: 0;
-		height: 1.5px;
+		height: 2px;
 		border-radius: 1px;
 		background: var(--color-accent-calc);
 	}
@@ -121,7 +121,7 @@
 		transition: color 0.1s;
 	}
 	.tab-btn:hover { color: var(--color-text-secondary); }
-	.tab.on .tab-btn { color: var(--color-text-primary); }
+	.tab.on .tab-btn { color: var(--color-text-primary); font-weight: 600; }
 
 	.tab-del {
 		width: 18px;
@@ -140,7 +140,7 @@
 		transition: opacity 0.1s, color 0.1s;
 	}
 	.tab:hover .tab-del, .tab.on .tab-del, .tab-del:focus-visible { opacity: 1; }
-	.tab-del:hover { color: #c96b6b; }
+	.tab-del:hover { color: var(--color-danger); }
 	@media (hover: none) {
 		.tab.on .tab-del { opacity: 1; }
 	}

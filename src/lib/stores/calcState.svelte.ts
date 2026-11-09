@@ -21,10 +21,10 @@ export let calcLines  = $state<CalcLine[]>([]);
 
 const PREFS_KEY = 'workkit-calc-prefs';
 
-type CalcPrefs = { mode: 'basic' | 'sci'; angle: AngleMode; keypadOpen: boolean; activeSheetId: string };
+type CalcPrefs = { mode: 'basic' | 'sci'; angle: AngleMode; keypadOpen: boolean; activeSheetId: string; theme: 'light' | 'dark' };
 
 function readPrefs(): CalcPrefs {
-	const fallback: CalcPrefs = { mode: 'basic', angle: 'deg', keypadOpen: true, activeSheetId: 'default' };
+	const fallback: CalcPrefs = { mode: 'basic', angle: 'deg', keypadOpen: true, activeSheetId: 'default', theme: 'light' };
 	if (!browser) return fallback;
 	try {
 		return { ...fallback, ...JSON.parse(localStorage.getItem(PREFS_KEY) ?? '{}') };
@@ -52,8 +52,8 @@ export let calcUI = $state<CalcPrefs & {
 
 export function saveCalcPrefs() {
 	if (!browser) return;
-	const { mode, angle, keypadOpen, activeSheetId } = calcUI;
-	try { localStorage.setItem(PREFS_KEY, JSON.stringify({ mode, angle, keypadOpen, activeSheetId })); } catch { /* ignore */ }
+	const { mode, angle, keypadOpen, activeSheetId, theme } = calcUI;
+	try { localStorage.setItem(PREFS_KEY, JSON.stringify({ mode, angle, keypadOpen, activeSheetId, theme })); } catch { /* ignore */ }
 }
 
 let _userId = '';

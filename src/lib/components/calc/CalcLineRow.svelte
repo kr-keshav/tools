@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { tick } from 'svelte';
+	import { onDestroy, onMount, tick, untrack } from 'svelte';
 	import {
 		calcUI,
 		updateLine,
@@ -14,7 +14,10 @@
 		type CalcLine,
 	} from '$lib/stores/calcState.svelte';
 	import { formatNumber, prepareInput, prettyExpr } from '$lib/calc/engine';
-	import { highlight, setLabel, toDisplay, toStored, type LineInfo } from '$lib/calc/tape';
+	import { addTags, highlight, setLabel, splitLine, syntaxError, tagTone, toDisplay, toStored, type LineInfo } from '$lib/calc/tape';
+	import { nextCascadeDelay, rise, takeFresh, wash } from '$lib/calc/motion';
+	import CalcRollingValue from './CalcRollingValue.svelte';
+	import { getCalcContext, type CalcField } from './calcContext';
 	import CalcSubTape from './CalcSubTape.svelte';
 
 	let {
@@ -24,6 +27,7 @@
 		idIndex,
 		names,
 		depth = 0,
+		hidden = false,
 		onUse,
 	}: {
 		line: CalcLine;
@@ -34,6 +38,8 @@
 		names: Set<string>;
 		/** 0 on a tab; 1+ inside a sub-calculation. */
 		depth?: number;
+		/** Filtered out by the active tag; kept mounted so it can fold away. */
+		hidden?: boolean;
 		/** Drop a reference to this line into the entry field. */
 		onUse: (text: string) => void;
 	} = $props();
@@ -50,6 +56,29 @@
 	let labelEditing = $state(false);
 	let labelDraft = $state('');
 	let labelEl = $state<HTMLInputElement | null>(null);
+	let tagEditing = $state(false);
+	let tagDraft = $state('');
+	let tagEl = $state<HTMLInputElement | null>(null);
+	let rootEl = $state<HTMLDivElement | null>(null);
+	let rollDelay = $state(0);
+	let lastValue = untrack(() => info.value);
+
+	onMount(() => {
+		if (takeFresh() && rootEl) rise(rootEl);
+	});
+
+	// A change arriving from elsewhere on the tape washes the row; the row being typed in
+	// is already the focus, so its digits just roll.
+	$effect.pre(() => {
+		const value = info.value;
+		untrack(() => {
+			if (value === lastValue) return;
+			lastValue = value;
+			if (value === undefined || !rowEl) return;
+			rollDelay = editing ? 0 : nextCascadeDelay();
+			if (!editing) wash(rowEl, rollDelay);
+		});
+	});
 
 	const segments = $derived(highlight(toDisplay(info.expr, idIndex), names));
 	const refText = $derived(info.name ?? `@${index + 1}`);
@@ -58,25 +87,59 @@
 	const expanded = $derived(!!subSheet && !!calcUI.expanded[line.id]);
 	const breakable = $derived(!subSheet && canBreakOut(line));
 
+	const ctx = getCalcContext();
+	const editField: CalcField = {
+		get el() { return inputEl; },
+		get value() { return draft; },
+		set: setDraft,
+		commit,
+	};
+
+	onDestroy(() => ctx.endEdit(editField));
+
 	async function startEdit() {
-		draft = toDisplay(line.input, idIndex);
+		// The label has its own editor, so this field only holds what follows it
+		draft = toDisplay(setLabel(line.input, ''), idIndex);
 		editing = true;
+		ctx.beginEdit(line.id, editField);
 		await tick();
 		inputEl?.focus();
-		inputEl?.select();
+		// Caret at the end: the next key carries the sum on instead of wiping the line
+		inputEl?.setSelectionRange(draft.length, draft.length);
+	}
+
+	/** What the line would store for this text, with its saved label still on it. */
+	function toInput(text: string): string {
+		const body = toStored(prepareInput(text), linesOf(line.sheetId));
+		const saved = splitLine(line.input).label;
+		// A label typed into this field on purpose replaces the existing one
+		return saved && !splitLine(body).label ? setLabel(body, saved) : body;
+	}
+
+	function setDraft(next: string) {
+		draft = next;
+		const text = next.trim();
+		// Half-typed expressions like `25+` keep showing the last result that made sense
+		if (!text) ctx.previewEdit(line.input);
+		else if (!syntaxError(prepareInput(text))) ctx.previewEdit(toInput(text));
+	}
+
+	function stopEdit() {
+		editing = false;
+		ctx.endEdit(editField);
 	}
 
 	function commit() {
 		if (!editing) return;
-		editing = false;
 		const next = draft.trim();
-		if (!next) deleteLine(line.id);
-		else updateLine(line.id, { input: toStored(prepareInput(next), linesOf(line.sheetId)) });
+		stopEdit();
+		// Emptying the field (AC is one tap away) leaves the line alone; deleting is in the ⋯ menu
+		if (next) updateLine(line.id, { input: toInput(next) });
 	}
 
 	function handleKey(e: KeyboardEvent) {
 		if (e.key === 'Enter') { e.preventDefault(); commit(); }
-		if (e.key === 'Escape') { e.preventDefault(); editing = false; }
+		if (e.key === 'Escape') { e.preventDefault(); stopEdit(); }
 	}
 
 	async function startLabel() {
@@ -97,6 +160,26 @@
 	function handleLabelKey(e: KeyboardEvent) {
 		if (e.key === 'Enter') { e.preventDefault(); commitLabel(); }
 		if (e.key === 'Escape') { e.preventDefault(); labelEditing = false; }
+	}
+
+	async function startTag() {
+		menuOpen = false;
+		tagDraft = '';
+		tagEditing = true;
+		await tick();
+		tagEl?.focus();
+	}
+
+	function commitTag() {
+		if (!tagEditing) return;
+		tagEditing = false;
+		const next = addTags(line.input, tagDraft);
+		if (next !== line.input) updateLine(line.id, { input: next });
+	}
+
+	function handleTagKey(e: KeyboardEvent) {
+		if (e.key === 'Enter') { e.preventDefault(); commitTag(); }
+		if (e.key === 'Escape') { e.preventDefault(); tagEditing = false; }
 	}
 
 	function toggleTag(tag: string) {
@@ -150,51 +233,61 @@
 
 <svelte:window onclick={handleWindowClick} onkeydown={handleWindowKey} />
 
-<div class="line" class:pinned={line.pinned}>
-	<div class="row" bind:this={rowEl} class:error={info.error !== undefined} class:editing class:menu-open={menuOpen}>
+<div class="line" class:pinned={line.pinned} class:hide={hidden} inert={hidden} bind:this={rootEl}>
+	<div class="clip">
+	<div
+		class="row"
+		style:--wash={info.tags[0] ? `var(--tag-${tagTone(info.tags[0])}-fg)` : 'var(--color-accent)'}
+		bind:this={rowEl}
+		class:error={info.error !== undefined} class:editing
+		class:menu-open={menuOpen}
+	>
 		<span class="idx">{index + 1}</span>
 
 		<div class="expr">
+			{#if subSheet}
+				<button
+					class="sub-toggle"
+					class:open={expanded}
+					onclick={() => toggleExpanded(line.id)}
+					aria-expanded={expanded}
+					title={expanded ? 'Hide sub-calc' : 'Show sub-calc'}
+				>
+					<svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M3.5 2l3 3-3 3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+					<span>{subCount}</span>
+				</button>
+			{/if}
+			{#if labelEditing}
+				<input
+					class="label-input"
+					bind:this={labelEl}
+					bind:value={labelDraft}
+					onkeydown={handleLabelKey}
+					onblur={commitLabel}
+					placeholder="Label"
+					maxlength="60"
+					spellcheck="false"
+					autocomplete="off"
+					aria-label="Label for line {index + 1}"
+				/>
+			{:else if info.label}
+				<button class="label" onclick={startLabel} title="Edit label">{info.label}</button>
+			{/if}
 			{#if editing}
 				<input
+					class="expr-input"
 					bind:this={inputEl}
-					bind:value={draft}
+					value={draft}
+					oninput={(e) => setDraft(e.currentTarget.value)}
 					onkeydown={handleKey}
 					onblur={commit}
+					inputmode={calcUI.keypadOpen ? 'none' : 'text'}
 					spellcheck="false"
 					autocomplete="off"
 					autocapitalize="off"
 					aria-label="Edit line {index + 1}"
 				/>
 			{:else}
-				{#if subSheet}
-					<button
-						class="sub-toggle"
-						class:open={expanded}
-						onclick={() => toggleExpanded(line.id)}
-						aria-expanded={expanded}
-						title={expanded ? 'Hide sub-calc' : 'Show sub-calc'}
-					>
-						<svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M3.5 2l3 3-3 3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
-						<span>{subCount}</span>
-					</button>
-				{/if}
-				{#if labelEditing}
-					<input
-						class="label-input"
-						bind:this={labelEl}
-						bind:value={labelDraft}
-						onkeydown={handleLabelKey}
-						onblur={commitLabel}
-						placeholder="Label"
-						maxlength="60"
-						spellcheck="false"
-						autocomplete="off"
-						aria-label="Label for line {index + 1}"
-					/>
-				{:else if info.label}
-					<button class="label" onclick={startLabel} title="Edit label">{info.label}</button>
-				{/if}
 				<button class="expr-btn" onclick={startEdit} title="Edit — lines that use this one recalculate">
 					{#if info.name}<span class="def">{info.name}</span><span class="eq">=</span>{/if}{#each segments as seg, i (i)}{#if seg.kind === 'text'}{prettyExpr(seg.text)}{:else}<span class="seg-{seg.kind}">{seg.text}</span>{/if}{/each}
 				</button>
@@ -208,12 +301,29 @@
 						{#each info.tags as tag (tag)}
 							<button
 								class="tag"
+								style:--tag-bg="var(--tag-{tagTone(tag)}-bg)"
+								style:--tag-fg="var(--tag-{tagTone(tag)}-fg)"
 								class:on={depth === 0 && calcUI.activeTag === tag}
 								onclick={() => toggleTag(tag)}
 								title={depth > 0 ? `#${tag}` : calcUI.activeTag === tag ? 'Show all lines' : `Show only #${tag}`}
 							>#{tag}</button>
 						{/each}
 					</span>
+				{/if}
+				{#if tagEditing}
+					<input
+						class="tag-input"
+						bind:this={tagEl}
+						bind:value={tagDraft}
+						onkeydown={handleTagKey}
+						onblur={commitTag}
+						placeholder="#tag"
+						maxlength="60"
+						spellcheck="false"
+						autocomplete="off"
+						autocapitalize="off"
+						aria-label="Add tags to line {index + 1}"
+					/>
 				{/if}
 				<!-- Trails the expression so revealing it on hover doesn't shift anything -->
 				{#if !info.label && !labelEditing}
@@ -228,7 +338,7 @@
 					class="value"
 					onclick={() => onUse(refText)}
 					title="Insert {refText} — a live link that updates when this line changes"
-				>{formatNumber(info.value)}</button>
+				><CalcRollingValue text={formatNumber(info.value)} delay={rollDelay} /></button>
 			{:else}
 				<span class="err" title={info.error}>{info.error}</span>
 			{/if}
@@ -263,6 +373,7 @@
 		{#if menuOpen}
 			<div class="menu" role="menu">
 				<button role="menuitem" onclick={startLabel}>{info.label ? 'Edit label' : 'Add label'}</button>
+				<button role="menuitem" onclick={startTag}>Add tag</button>
 				{#if depth === 0}
 					<button role="menuitem" onclick={() => menuAction(() => togglePin(line.id))}>
 						{line.pinned ? 'Unpin' : 'Pin to top'}
@@ -301,12 +412,23 @@
 	{#if expanded && subSheet}
 		<CalcSubTape sheetId={subSheet.id} depth={depth + 1} />
 	{/if}
+	</div>
 </div>
 
 <style>
-	.line { border-bottom: 1px solid var(--color-border-subtle); }
+	.line {
+		display: grid;
+		grid-template-rows: 1fr;
+		border-bottom: 1px solid var(--color-border-subtle);
+		transition: grid-template-rows 320ms var(--ease-out), opacity 250ms;
+	}
+	.line.hide { grid-template-rows: 0fr; opacity: 0; border-bottom-color: transparent; }
+	.clip { min-height: 0; animation: unclip 320ms; }
+	.line.hide .clip { overflow: hidden; }
+	/* Only clip while folding: at rest the ⋯ menu has to escape the row */
+	@keyframes unclip { from, to { overflow: hidden; } }
 	.line:last-child { border-bottom: none; }
-	.line.pinned > .row .idx { color: var(--color-accent-calc); }
+	.line.pinned > .clip > .row .idx { color: var(--color-accent-calc); }
 
 	.row {
 		position: relative;
@@ -318,7 +440,8 @@
 		padding: 0 0.5rem 0 0.25rem;
 		transition: background 0.1s;
 	}
-	.row:hover, .row.editing, .row.menu-open { background: var(--color-bg-panel); }
+	.row:hover, .row.menu-open { background: var(--color-bg-panel); }
+	.row.editing { background: var(--color-bg-active); }
 
 	.idx {
 		font-size: 0.65rem;
@@ -378,7 +501,8 @@
 		border: none;
 		padding: 0.5rem 0;
 		font-family: inherit;
-		font-size: 0.82rem;
+		font-size: 0.85rem;
+		font-weight: 700;
 		color: var(--color-text-primary);
 		white-space: nowrap;
 		overflow: hidden;
@@ -410,12 +534,12 @@
 	@media (hover: none) {
 		.add-label { display: none; }
 	}
-	.def { color: var(--color-text-primary); font-weight: 500; }
+	.def { color: var(--color-text-primary); font-weight: 700; }
 	.eq  { color: var(--color-text-faint); margin: 0 0.45em; }
 	.seg-var { color: var(--color-text-primary); }
 	.seg-ref { color: var(--color-accent-calc); }
-	.seg-tag { color: var(--color-accent-notes); }
-	.seg-bad { color: #c96b6b; }
+	.seg-tag { color: var(--color-accent-calc); }
+	.seg-bad { color: var(--color-danger); }
 
 	.note-dot {
 		display: flex;
@@ -433,32 +557,35 @@
 		flex-shrink: 0;
 	}
 	.tag {
-		background: color-mix(in srgb, var(--color-accent-notes) 10%, transparent);
-		border: 1px solid color-mix(in srgb, var(--color-accent-notes) 25%, transparent);
+		background: var(--tag-bg);
+		border: none;
 		border-radius: 10px;
-		padding: 0.05rem 0.45rem;
+		padding: 0.1rem 0.5rem;
 		font-family: inherit;
-		font-size: 0.62rem;
-		color: var(--color-accent-notes);
-		transition: background 0.1s, border-color 0.1s;
+		font-size: 0.66rem;
+		font-weight: 600;
+		color: var(--tag-fg);
+		transition: filter 0.1s;
 	}
-	.tag:hover, .tag.on {
-		background: color-mix(in srgb, var(--color-accent-notes) 22%, transparent);
-		border-color: color-mix(in srgb, var(--color-accent-notes) 50%, transparent);
-	}
+	.tag:hover, .tag.on { filter: brightness(0.94); }
 
 	.expr input {
 		width: 100%;
 		background: var(--color-bg-surface);
-		border: 1px solid var(--color-border-default);
-		border-radius: 4px;
-		padding: 0.3rem 0.4rem;
+		border: 1.5px solid var(--color-border-default);
+		border-radius: 9px;
+		padding: 0.3rem 0.5rem;
 		font-family: inherit;
 		font-size: 0.8rem;
 		color: var(--color-text-primary);
 		outline: none;
 	}
-	.expr input:focus { border-color: color-mix(in srgb, var(--color-accent-calc) 60%, transparent); }
+	.expr input:focus { border-color: var(--color-accent); }
+	.expr .expr-input { flex: 1; min-width: 0; caret-color: var(--color-accent-calc); }
+	.expr .tag-input { flex: 0 1 8rem; width: 8rem; min-width: 0; }
+
+	/* The line being edited is the calculator's display for now */
+	.row.editing .idx, .row.editing .value { color: var(--color-accent); }
 
 	.result {
 		text-align: right;
@@ -473,7 +600,7 @@
 		border-radius: 4px;
 		font-family: inherit;
 		font-size: 0.95rem;
-		font-weight: 500;
+		font-weight: 700;
 		color: var(--color-text-primary);
 		font-variant-numeric: tabular-nums;
 		white-space: nowrap;
@@ -487,7 +614,7 @@
 	.err {
 		display: block;
 		font-size: 0.7rem;
-		color: #c96b6b;
+		color: var(--color-danger);
 		white-space: nowrap;
 		overflow: hidden;
 		text-overflow: ellipsis;
@@ -531,8 +658,13 @@
 		padding: 0.3rem;
 		background: var(--color-bg-surface);
 		border: 1px solid var(--color-border-default);
-		border-radius: 8px;
-		box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+		border-radius: 14px;
+		box-shadow: var(--shadow-card);
+		animation: pop 420ms var(--ease-spring) backwards;
+		transform-origin: top right;
+	}
+	@keyframes pop {
+		from { transform: scale(0.85); opacity: 0; }
 	}
 	.menu button {
 		display: block;
@@ -548,7 +680,7 @@
 		transition: background 0.1s, color 0.1s;
 	}
 	.menu button:hover { background: var(--color-bg-hover); color: var(--color-text-primary); }
-	.menu button.danger:hover { color: #c96b6b; }
+	.menu button.danger:hover { color: var(--color-danger); }
 
 	.note {
 		display: block;
