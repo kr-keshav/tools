@@ -12,6 +12,7 @@
 	const userEmail = $derived(authState.user?.email ?? '');
 	const viewUid = $derived($page.url.searchParams.get('view'));
 	const isViewerMode = $derived(!!viewUid);
+	const isCalcRoute = $derived($page.url.pathname === '/calc');
 
 	function handleSignOut() {
 		showUserMenu = false;
@@ -54,6 +55,32 @@
 
 	<!-- Right: actions -->
 	<div class="right">
+		<!-- Calc is its own route outside the panel layout, so it gets a direct link -->
+		{#if isCalcRoute}
+			<button class="nav-btn" onclick={() => goto('/timer' + $page.url.search)} title="Back to Timer, Notes and Todo">
+				<svg width="13" height="13" viewBox="0 0 13 13" fill="none">
+					<rect x="1" y="2" width="11" height="9" rx="1.5" stroke="currentColor" stroke-width="1.1"/>
+					<line x1="4.5" y1="2" x2="4.5" y2="11" stroke="currentColor" stroke-width="1.1"/>
+					<line x1="8.5" y1="2" x2="8.5" y2="11" stroke="currentColor" stroke-width="1.1"/>
+				</svg>
+				<span>Tools</span>
+			</button>
+		{:else}
+			<button class="nav-btn calc" onclick={() => goto('/calc' + $page.url.search)} title="Calculator with full history">
+				<svg width="13" height="13" viewBox="0 0 13 13" fill="none">
+					<rect x="2" y="1" width="9" height="11" rx="1.5" stroke="currentColor" stroke-width="1.1"/>
+					<rect x="3.75" y="2.75" width="5.5" height="2" rx="0.4" fill="currentColor" fill-opacity="0.5"/>
+					<circle cx="4.5" cy="7.25" r="0.65" fill="currentColor"/>
+					<circle cx="6.5" cy="7.25" r="0.65" fill="currentColor"/>
+					<circle cx="8.5" cy="7.25" r="0.65" fill="currentColor"/>
+					<circle cx="4.5" cy="9.75" r="0.65" fill="currentColor"/>
+					<circle cx="6.5" cy="9.75" r="0.65" fill="currentColor"/>
+					<circle cx="8.5" cy="9.75" r="0.65" fill="currentColor"/>
+				</svg>
+				<span>Calc</span>
+			</button>
+		{/if}
+
 		<!-- QR button — only show in non-viewer mode -->
 		{#if !isViewerMode}
 			<button
@@ -227,6 +254,30 @@
 		background: var(--color-bg-hover);
 	}
 	.qr-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+	.nav-btn {
+		display: flex;
+		align-items: center;
+		gap: 0.375rem;
+		background: none;
+		border: 1px solid transparent;
+		border-radius: 6px;
+		color: var(--color-text-secondary);
+		font-family: inherit;
+		font-size: 0.72rem;
+		padding: 0.3rem 0.5rem;
+		height: 28px;
+		transition: color 0.15s, border-color 0.15s, background 0.15s;
+	}
+	.nav-btn:hover { color: var(--color-text-primary); background: var(--color-bg-hover); }
+	.nav-btn.calc:hover {
+		color: var(--color-accent-calc);
+		border-color: color-mix(in srgb, var(--color-accent-calc) 40%, transparent);
+		background: color-mix(in srgb, var(--color-accent-calc) 10%, transparent);
+	}
+	@media (max-width: 560px) {
+		.nav-btn span { display: none; }
+	}
 
 	.icon-btn {
 		display: flex;

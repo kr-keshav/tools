@@ -7,6 +7,7 @@
 	import { loadNotes, unloadNotes } from '$lib/stores/notesState.svelte';
 	import { loadTasks, unloadTasks } from '$lib/stores/todoState.svelte';
 	import { setupTimerSync, unloadTimerState } from '$lib/stores/timerState.svelte';
+	import { loadCalc, unloadCalc } from '$lib/stores/calcState.svelte';
 
 	let { children } = $props();
 
@@ -39,12 +40,14 @@
 				unloadNotes();
 				unloadTasks();
 				unloadTimerState();
+				unloadCalc();
 			}
 
 			// Load data for target user — bidirectional sync, last-write-wins
 			loadNotes(targetUid);
 			loadTasks(targetUid);
 			setupTimerSync(targetUid);
+			loadCalc(targetUid);
 
 			prevDataUid = targetUid;
 		}

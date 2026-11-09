@@ -10,9 +10,11 @@
   --color-text-primary: #e8e8e8;
   --color-text-secondary: #888888;
   --color-text-muted: #555555;
+  --color-text-faint: #555555;
   --color-accent-timer: #6c8ebf;
   --color-accent-notes: #82b366;
   --color-accent-todo: #b5866b;
+  --color-accent-calc: #9673a6;
 
   --font-family-mono: 'JetBrains Mono', monospace;
 
@@ -30,4 +32,105 @@ html, body {
 
 button {
   cursor: pointer;
+}
+
+/* Respect the OS setting — panel slides, spinners and toasts all animate by default. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* A visible focus ring on a near-black background — the browser default is easy to lose. */
+:focus-visible {
+  outline: 2px solid var(--color-accent-timer);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+/* Ripple theme (see DESIGN.md). Scoped so tools can move over one at a time. */
+.ripple {
+  --color-bg-primary: #eceff7;
+  --color-bg-surface: #ffffff;
+  --color-bg-panel: #f7f8fc;
+  --color-bg-hover: #f2f4fa;
+  --color-bg-active: #eef0ff;
+  --color-border-default: #e6e9f2;
+  --color-border-subtle: #e6e9f2;
+  --color-text-primary: #171a2b;
+  --color-text-secondary: #5f6680;
+  --color-text-muted: #5f6680;
+  --color-text-faint: #7a809a;
+  --color-accent: #3d4fe0;
+  --color-accent-calc: #3d4fe0;
+  --color-accent-soft: #e3e6ff;
+  --color-on-accent: #ffffff;
+  --color-danger: #c23b3b;
+  --key-digit: #f2f4fa;
+  --key-util: #e6e9f5;
+  --key-op-text: #3d4fe0;
+  --shadow-card: 0 8px 28px #2a336614;
+  --tag-0-bg: #e3e8ff; --tag-0-fg: #3346c9;
+  --tag-1-bg: #ffe9cf; --tag-1-fg: #94500a;
+  --tag-2-bg: #ddf4e4; --tag-2-fg: #1c7a45;
+  --tag-3-bg: #f9e0ea; --tag-3-fg: #a82860;
+  --tag-4-bg: #e7e0fa; --tag-4-fg: #5b3bbf;
+  --ease-spring: cubic-bezier(0.2, 1.5, 0.35, 1);
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+
+  color: var(--color-text-primary);
+  color-scheme: light;
+  font-family: 'Manrope', system-ui, sans-serif;
+  font-variant-numeric: tabular-nums;
+}
+
+.ripple[data-theme='dark'] {
+  --color-bg-primary: #111214;
+  --color-bg-surface: #1a1b1e;
+  --color-bg-panel: #16171a;
+  --color-bg-hover: #26272b;
+  --color-bg-active: #25263a;
+  --color-border-default: #2a2c30;
+  --color-border-subtle: #2a2c30;
+  --color-text-primary: #ececee;
+  --color-text-secondary: #a3a5ac;
+  --color-text-muted: #a3a5ac;
+  --color-text-faint: #7f828a;
+  --color-accent: #7f8cff;
+  --color-accent-calc: #7f8cff;
+  --color-accent-soft: #2a2c45;
+  --color-on-accent: #101114;
+  --color-danger: #e5807f;
+  --key-digit: #26272b;
+  --key-util: #202125;
+  --key-op-text: #aab4ff;
+  --shadow-card: 0 8px 28px #00000066;
+  --tag-0-bg: #a9b6ff33; --tag-0-fg: #a9b6ff;
+  --tag-1-bg: #f5be7e33; --tag-1-fg: #f5be7e;
+  --tag-2-bg: #7fd8a033; --tag-2-fg: #7fd8a0;
+  --tag-3-bg: #f29abc33; --tag-3-fg: #f29abc;
+  --tag-4-bg: #c3aeff33; --tag-4-fg: #c3aeff;
+  color-scheme: dark;
+}
+
+.ripple :focus-visible { outline-color: var(--color-accent); }
+
+.rip {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  margin: -6px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.28;
+  pointer-events: none;
+  animation: ripple-out 500ms cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+}
+@keyframes ripple-out {
+  to { transform: scale(14); opacity: 0; }
 }
